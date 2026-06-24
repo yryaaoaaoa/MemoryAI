@@ -14,5 +14,6 @@ Thumbs.db
 
 ### Env ###
 .env
+application.yml
 *.log
 application.yml
