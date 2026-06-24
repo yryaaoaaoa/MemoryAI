@@ -1,0 +1,34 @@
+# ========== 构建产出 ==========
+dist/
+node_modules/
+target/
+*.class
+*.jar
+*.war
+
+# ========== 环境变量（含敏感信息） ==========
+.env
+.env.*.local
+*.local
+
+# ========== IDE ==========
+.idea/
+*.iml
+.vscode/
+
+# ========== 操作系统 ==========
+.DS_Store
+Thumbs.db
+
+# ========== 日志 ==========
+*.log
+logs/
+
+# ========== 测试/工具生成 ==========
+.playwright-mcp/
+.codegraph/
+
+# ========== 单文件测试/草稿 ==========
+test_llm.py
+prototype-B.png
+login-page

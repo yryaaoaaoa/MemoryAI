@@ -1,0 +1,120 @@
+# ==============================================================
+# 生产环境配置 — 覆盖 application.yml 中的敏感信息和端口
+# 所有密码/密钥通过环境变量注入，禁止硬编码
+# 激活方式: --spring.profiles.active=prod
+# ==============================================================
+
+server:
+  port: ${SERVER_PORT:8080}
+  servlet:
+    session:
+      cookie:
+        secure: true
+        same-site: strict
+        max-age: 3600
+
+spring:
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USER}
+    password: ${DB_PASS}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      minimum-idle: 5
+      idle-timeout: 300000
+      connection-timeout: 10000
+
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASS}
+      timeout: 3000
+      lettuce:
+        pool:
+          max-active: 16
+          max-idle: 8
+          min-idle: 4
+
+  session:
+    timeout: 1800
+    redis:
+      namespace: "spring:session:jobai"
+      flush-mode: on_save
+
+# MyBatis-Plus — 生产关闭所有 SQL 日志
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
+
+# Elasticsearch
+jobai:
+  elasticsearch:
+    host: ${ES_HOST}
+    port: ${ES_PORT:9200}
+    scheme: https
+    username: ${ES_USER:elastic}
+    password: ${ES_PASS}
+
+  # Ollama (Embedding) — 生产通常走 SiliconFlow 而非本地 Ollama
+  ollama:
+    base-url: ${OLLAMA_URL:http://localhost:11434}
+    embedding-model: bge-m3
+
+  # Embedding Provider
+  embedding:
+    provider: ${EMBEDDING_PROVIDER:siliconflow}
+
+  # SiliconFlow
+  siliconflow:
+    api-key: ${SILICONFLOW_API_KEY}
+    base-url: https://api.siliconflow.cn/v1
+    model: BAAI/bge-m3
+
+  # Text Splitter
+  splitter:
+    max-chars: 1024
+    overlap-chars: 128
+    strategy: recursive
+    token-estimation: half
+
+  # Retrieval (Hybrid Search)
+  retrieval:
+    rank-constant: 60
+    num-candidates-factor: 2
+    rank-window-factor: 2
+    bm25-fields: content^3,heading_path
+    short-query-max-len: 4
+    medium-query-max-len: 12
+    short-query:
+      top-k: 20
+      min-score: 0.25
+    medium-query:
+      top-k: 12
+      min-score: 0.28
+    long-query:
+      top-k: 8
+      min-score: 0.28
+    defaults:
+      top-k: 3
+      min-score: 0.2
+
+  # DeepSeek API
+  deepseek:
+    api-key: ${DEEPSEEK_API_KEY}
+    base-url: https://api.deepseek.com
+    model: ${DEEPSEEK_MODEL:deepseek-v4-flash}
+
+  # OCR
+  ocr:
+    paddle:
+      server-url: ${OCR_PADDLE_URL}
+      access-token: ${OCR_PADDLE_TOKEN}
+
+# Knife4j — 生产关闭 Swagger 文档
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false

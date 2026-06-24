@@ -1,0 +1,983 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MemorAI — 学习面板集成示意</title>
+<style>
+:root {
+  --bg-root: #08080c;
+  --bg-elevated: #0d0d16;
+  --bg-card: rgba(255,255,255,0.03);
+  --bg-glass: rgba(255,255,255,0.035);
+  --bg-hover: rgba(255,255,255,0.06);
+  --border: rgba(255,255,255,0.06);
+  --border-light: rgba(255,255,255,0.1);
+  --text: #e2e8f0;
+  --text-mut: #64748b;
+  --text-dim: #3b4050;
+  --accent: #38bdf8;
+  --accent-dim: #0284c7;
+  --accent-glow: rgba(56,189,248,0.15);
+  --green: #34d399;
+  --green-dim: rgba(52,211,153,0.12);
+  --red: #f87171;
+  --amber: #fbbf24;
+  --violet: #a78bfa;
+  --violet-dim: rgba(167,139,250,0.08);
+  --rose: #fb7185;
+  --rad: 12px;
+  --rad-sm: 8px;
+  --font: -apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+  --font-mono: 'JetBrains Mono','Fira Code','Consolas',monospace;
+  --font-display: 'SF Pro Display',-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg-root); color: var(--text); font-family: var(--font);
+  font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased;
+}
+
+/* ====== Page Header ====== */
+.page-hd {
+  text-align: center; padding: 40px 20px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.page-hd h1 { font-family: var(--font-display); font-size: 22px; font-weight: 800; letter-spacing: -0.3px; }
+.page-hd h1 span { color: var(--accent); }
+.page-hd p { color: var(--text-mut); font-size: 13px; margin-top: 4px; }
+.page-ft {
+  text-align: center; padding: 24px; color: var(--text-dim); font-size: 11px;
+  border-top: 1px solid var(--border); letter-spacing: 0.5px;
+}
+
+/* ====== Variant Wrapper ====== */
+.variant {
+  max-width: 1440px; margin: 0 auto; padding: 32px 24px;
+}
+.variant-label {
+  display: flex; align-items: center; gap: 14px; margin-bottom: 16px;
+}
+.variant-label .num {
+  font-family: var(--font-display); font-size: 13px; font-weight: 800;
+  color: var(--accent); background: var(--accent-glow); padding: 2px 10px;
+  border-radius: 6px; letter-spacing: 0.3px;
+}
+.variant-label .name {
+  font-family: var(--font-display); font-size: 17px; font-weight: 700; letter-spacing: -0.2px;
+}
+.variant-label .tagline {
+  font-size: 12px; color: var(--text-mut); margin-left: auto;
+}
+.variant-label .tagline em { font-style: normal; color: var(--accent); }
+
+/* ====== Layout Shell ====== */
+.shell {
+  display: flex; height: 520px;
+  border: 1px solid var(--border); border-radius: 16px; overflow: hidden;
+  background: var(--bg-elevated); position: relative;
+}
+
+/* ====== Sidebar ====== */
+.sb {
+  width: 180px; flex-shrink: 0; background: var(--bg-root);
+  border-right: 1px solid var(--border); padding: 16px 10px;
+  display: flex; flex-direction: column;
+}
+.sb-brand { display: flex; align-items: center; gap: 8px; padding: 4px 8px; margin-bottom: 28px; }
+.sb-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+.sb-name { font-family: var(--font-display); font-size: 14px; font-weight: 800; letter-spacing: -0.2px; }
+.sb-nav { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.sb-link {
+  display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px;
+  font-size: 12px; color: var(--text-mut); text-decoration: none; transition: all 0.15s;
+  cursor: default;
+}
+.sb-link:hover { background: var(--bg-hover); color: var(--text); }
+.sb-link.on { background: var(--bg-hover); color: var(--text); }
+.sb-link.on .sb-ico { color: var(--accent); }
+.sb-ico { font-size: 11px; width: 14px; text-align: center; flex-shrink: 0; }
+.sb-lbl { font-weight: 500; }
+.sb-bot { padding-top: 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px; }
+
+/* ====== Chat Area ====== */
+.chat {
+  flex: 1; display: flex; flex-direction: column; min-width: 0; padding: 16px 20px 12px;
+}
+.chat-hd {
+  display: flex; justify-content: space-between; align-items: center; padding-bottom: 10px;
+  border-bottom: 1px solid var(--border); margin-bottom: 12px;
+}
+.chat-hd-title { font-family: var(--font-display); font-size: 13px; font-weight: 700; }
+.chat-hd-badge {
+  font-size: 10px; color: var(--text-dim); background: var(--bg-glass);
+  padding: 2px 8px; border-radius: 10px; border: 1px solid var(--border);
+}
+.chat-msgs { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 4px; }
+.msg { display: flex; gap: 10px; animation: msgIn 0.3s ease-out; }
+.msg.user { flex-direction: row-reverse; }
+@keyframes msgIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+.msg-av {
+  width: 26px; height: 26px; border-radius: 7px; flex-shrink: 0;
+  background: var(--bg-glass); border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 9px; font-weight: 700; color: var(--text-mut);
+  backdrop-filter: blur(8px);
+}
+.av-ai { border-color: rgba(56,189,248,0.15); box-shadow: 0 0 6px rgba(56,189,248,0.08); }
+.msg-bd { max-width: 75%; }
+.msg-bub {
+  padding: 10px 14px; border-radius: 12px; font-size: 13px; line-height: 1.65; word-break: break-word;
+}
+.msg.user .msg-bub { background: var(--accent); color: #fff; border-bottom-right-radius: 5px; }
+.msg:not(.user) .msg-bub {
+  background: var(--bg-glass); border: 1px solid var(--border); border-bottom-left-radius: 5px;
+  backdrop-filter: blur(8px);
+}
+.msg-bub :deep(p) { margin: 0 0 4px; }
+.msg-bub code {
+  font-family: var(--font-mono); font-size: 11px;
+  background: rgba(255,255,255,0.06); padding: 1px 5px; border-radius: 3px;
+}
+.msg-bub .tool-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; color: var(--accent); background: var(--accent-glow);
+  padding: 1px 8px; border-radius: 4px; margin-bottom: 4px;
+}
+.msg-bub .tool-tag::before { content: '🔧'; font-size: 9px; }
+.chat-inp {
+  margin-top: 10px; display: flex; gap: 6px; padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.chat-inp-fake {
+  flex: 1; border: 1px solid var(--border); border-radius: 16px;
+  padding: 8px 14px; font-size: 12px; color: var(--text-dim); background: var(--bg-glass);
+  cursor: default; backdrop-filter: blur(8px);
+}
+.chat-inp-btn {
+  width: 32px; height: 32px; border-radius: 50%; border: none;
+  background: var(--accent); color: #fff; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; opacity: 0.5;
+}
+
+/* ====== Learning Panel Base ====== */
+.panel {
+  width: 300px; flex-shrink: 0; border-left: 1px solid var(--border);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.panel-wrap { flex: 1; overflow-y: auto; padding: 12px 14px 14px; }
+
+/* ====== Panel Design 1: Context Hub ====== */
+.p1 { background: linear-gradient(180deg, rgba(167,139,250,0.02), transparent 40%); }
+.p1-hd {
+  display: flex; align-items: center; gap: 6px; padding: 0 14px; height: 40px;
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.p1-hd-tab {
+  font-size: 10px; padding: 3px 10px; border-radius: 6px; cursor: default;
+  color: var(--text-dim); border: 1px solid transparent;
+}
+.p1-hd-tab.on { color: var(--text); background: var(--bg-glass); border-color: var(--border); }
+.p1-hd-tab .badge {
+  font-size: 9px; background: var(--accent-glow); color: var(--accent);
+  padding: 0 5px; border-radius: 6px; margin-left: 3px;
+}
+
+.p1-sec { margin-bottom: 14px; }
+.p1-sec-hd {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 8px;
+  font-size: 11px; font-weight: 600; color: var(--text-mut); text-transform: uppercase; letter-spacing: 0.6px;
+}
+.p1-sec-hd .ico { font-size: 10px; }
+
+/* Quiz cards */
+.p1-card {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; margin-bottom: 6px; position: relative;
+  transition: all 0.15s;
+}
+.p1-card:hover { background: var(--bg-glass); border-color: var(--border-light); }
+.p1-card .tag {
+  display: inline-block; font-size: 9px; padding: 1px 6px; border-radius: 3px;
+  font-weight: 600; letter-spacing: 0.3px; margin-bottom: 4px;
+}
+.p1-card .tag.java { background: var(--accent-glow); color: var(--accent); }
+.p1-card .tag.jvm { background: var(--violet-dim); color: var(--violet); }
+.p1-card .q { font-size: 12px; line-height: 1.5; margin-bottom: 4px; }
+.p1-card .meta {
+  font-size: 10px; color: var(--text-dim);
+  display: flex; gap: 8px; align-items: center;
+}
+.p1-card .meta .src {
+  display: inline-flex; align-items: center; gap: 3px;
+  color: var(--accent); font-size: 9px;
+}
+.p1-card .meta .src::before { content: '↳'; }
+.p1-card .status {
+  font-size: 9px; padding: 1px 6px; border-radius: 4px;
+}
+.p1-card .status.pending { background: rgba(251,191,36,0.12); color: var(--amber); }
+.p1-card .status.done { background: var(--green-dim); color: var(--green); }
+
+/* Radar chart placeholder */
+.radar-wrap {
+  position: relative; height: 110px; margin: 4px 0 8px;
+  display: flex; align-items: center; justify-content: center;
+}
+.radar-svg { width: 100px; height: 100px; }
+.weak-list { list-style: none; }
+.weak-list li {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px; font-size: 11px; border-radius: 4px; margin-bottom: 2px;
+}
+.weak-list li .bar {
+  height: 4px; border-radius: 2px; flex: 1;
+}
+.weak-list li .pct { font-size: 10px; color: var(--text-dim); min-width: 24px; text-align: right; }
+
+/* Timeline */
+.tl { position: relative; padding-left: 16px; }
+.tl::before {
+  content: ''; position: absolute; left: 3px; top: 4px; bottom: 4px;
+  width: 1.5px; background: var(--border); border-radius: 1px;
+}
+.tl-item { position: relative; padding: 0 0 10px 12px; }
+.tl-item::before {
+  content: ''; position: absolute; left: -13px; top: 5px;
+  width: 7px; height: 7px; border-radius: 50%; background: var(--border);
+  border: 2px solid var(--bg-elevated);
+}
+.tl-item.ok::before { background: var(--green); }
+.tl-item.cur::before { background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
+.tl-item .tl-title { font-size: 12px; font-weight: 500; }
+.tl-item .tl-sub { font-size: 10px; color: var(--text-dim); }
+
+/* ====== Panel Design 2: Mastery Dashboard ====== */
+.p2 { background: linear-gradient(180deg, rgba(56,189,248,0.015), transparent 30%); }
+.p2-hd {
+  padding: 0 14px; height: 40px; display: flex; align-items: center; gap: 6px;
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.p2-hd-label { font-size: 11px; font-weight: 600; color: var(--text-mut); text-transform: uppercase; letter-spacing: 0.8px; }
+.p2-hd .live {
+  font-size: 9px; color: var(--green); display: flex; align-items: center; gap: 4px;
+  margin-left: auto;
+}
+.p2-hd .live::before {
+  content: ''; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--green); animation: pulse-dot 1.5s infinite;
+}
+@keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+/* Ring grid */
+.rings {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px 0 8px;
+}
+.ring-item { text-align: center; padding: 8px; }
+.ring-canvas {
+  width: 52px; height: 52px; border-radius: 50%; position: relative;
+  margin: 0 auto 4px; display: flex; align-items: center; justify-content: center;
+}
+.ring-canvas .pct { font-size: 11px; font-weight: 700; color: var(--text); }
+.ring-item .topic { font-size: 10px; color: var(--text-mut); }
+.ring-item.highlight .topic { color: var(--accent); font-weight: 600; }
+.ring-item.highlight .ring-canvas { box-shadow: 0 0 12px var(--accent-glow); }
+
+/* Heatmap */
+.heatmap { margin: 8px 0 12px; }
+.heatmap-hd { font-size: 10px; color: var(--text-mut); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+.heatmap-grid {
+  display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px;
+}
+.hm-cell {
+  aspect-ratio: 1; border-radius: 3px; min-height: 14px;
+}
+.hm-cell.l0 { background: rgba(255,255,255,0.03); }
+.hm-cell.l1 { background: rgba(248,113,113,0.12); }
+.hm-cell.l2 { background: rgba(248,113,113,0.25); }
+.hm-cell.l3 { background: rgba(248,113,113,0.45); }
+.hm-cell.l4 { background: rgba(248,113,113,0.7); }
+.heatmap-labels {
+  display: flex; justify-content: space-between; font-size: 8px; color: var(--text-dim);
+  margin-top: 3px;
+}
+
+/* Mastery Timeline */
+.p2-plan { margin-top: 4px; }
+.p2-plan-item {
+  display: flex; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border);
+  align-items: flex-start;
+}
+.p2-plan-item:last-child { border-bottom: none; }
+.p2-plan-week {
+  font-size: 10px; font-weight: 600; color: var(--text-mut); min-width: 36px; padding-top: 1px;
+}
+.p2-plan-tag {
+  font-size: 9px; padding: 1px 6px; border-radius: 4px; font-weight: 600;
+  display: inline-block; margin-bottom: 2px;
+}
+.p2-plan-tag.concept { background: var(--accent-glow); color: var(--accent); }
+.p2-plan-tag.practice { background: var(--green-dim); color: var(--green); }
+.p2-plan-tag.deep { background: var(--violet-dim); color: var(--violet); }
+.p2-plan-desc { font-size: 11px; line-height: 1.5; }
+
+/* ====== Panel Design 3: Study Studio ====== */
+.p3 { width: 360px; background: linear-gradient(180deg, rgba(52,211,153,0.015), transparent 30%); }
+.p3-hd {
+  padding: 0 16px; height: 40px; display: flex; align-items: center; gap: 8px;
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.p3-hd-tab {
+  font-size: 10px; padding: 3px 10px; border-radius: 6px; cursor: default;
+  color: var(--text-dim); border: 1px solid transparent;
+}
+.p3-hd-tab.on { color: var(--text); background: var(--bg-glass); border-color: var(--border); }
+
+.p3-split { display: flex; flex: 1; overflow: hidden; }
+.p3-left, .p3-right {
+  flex: 1; display: flex; flex-direction: column; overflow-y: auto;
+}
+.p3-left { border-right: 1px solid var(--border); }
+.p3-section {
+  padding: 10px 14px;
+}
+.p3-section-hd {
+  font-size: 10px; color: var(--text-mut); font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; margin-bottom: 6px; display: flex; align-items: center; gap: 4px;
+}
+.p3-q {
+  font-size: 12px; line-height: 1.6; margin-bottom: 8px;
+}
+.p3-opt {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px;
+  font-size: 11px; margin-bottom: 3px; cursor: default; transition: all 0.12s;
+}
+.p3-opt:hover { border-color: var(--border-light); }
+.p3-opt .lbl { font-weight: 600; color: var(--text-mut); }
+.p3-opt.sel { border-color: var(--accent); background: var(--accent-glow); }
+.p3-opt.ok { border-color: var(--green); background: var(--green-dim); }
+.p3-opt.ok .lbl { color: var(--green); }
+.p3-draft {
+  min-height: 60px; border: 1px dashed var(--border); border-radius: 8px;
+  padding: 8px; font-size: 11px; color: var(--text-dim); line-height: 1.6;
+  cursor: default;
+}
+.p3-draft .hl { color: var(--accent); }
+.p3-submit {
+  margin-top: 6px; padding: 5px 12px; border-radius: 6px;
+  background: var(--accent); color: #fff; border: none;
+  font-size: 11px; font-weight: 600; cursor: default; opacity: 0.4;
+}
+
+/* Knowledge graph */
+.graph-wrap {
+  position: relative; height: 140px; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+}
+.graph-node {
+  position: absolute; width: 44px; height: 32px; border-radius: 8px;
+  background: var(--bg-glass); border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 8px; font-weight: 600; color: var(--text-mut);
+}
+.graph-node.core { border-color: var(--accent); color: var(--accent); background: var(--accent-glow); }
+.graph-node.dim { opacity: 0.5; }
+.graph-edge {
+  position: absolute; height: 1.5px; background: var(--border);
+  transform-origin: left center;
+}
+.graph-edge.hl { background: var(--accent); opacity: 0.3; }
+
+/* Ref list */
+.ref-item {
+  display: flex; gap: 6px; padding: 5px 0; border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+.ref-item:last-child { border-bottom: none; }
+.ref-item .num { font-size: 10px; color: var(--text-dim); min-width: 16px; }
+.ref-item .txt { flex: 1; line-height: 1.5; }
+.ref-item .tag {
+  font-size: 8px; padding: 0 5px; border-radius: 3px;
+  background: var(--accent-glow); color: var(--accent); flex-shrink: 0; height: fit-content;
+}
+
+/* ====== Scroller ====== */
+.scroll { overflow-y: auto; }
+.scroll::-webkit-scrollbar { width: 3px; }
+.scroll::-webkit-scrollbar-track { background: transparent; }
+.scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.05); border-radius: 2px; }
+
+/* ====== Connector arrows ====== */
+.connector {
+  position: absolute; pointer-events: none; z-index: 5;
+}
+.connector svg { overflow: visible; }
+
+/* ====== Variant divider ====== */
+.vdiv {
+  max-width: 1440px; margin: 0 auto; padding: 0 24px;
+}
+.vdiv-line { border: none; border-top: 1px solid var(--border); }
+
+/* ====== Responsive ====== */
+@media (max-width: 1100px) { .p3 { width: 300px; } }
+</style>
+</head>
+<body>
+
+<!-- ====== Page Header ====== -->
+<div class="page-hd">
+  <h1>MemorAI <span>//</span> 学习面板集成架构</h1>
+  <p>Agent 对话 × 学习面板 · 三种面板设计 · 统一 Pinia Store 桥接</p>
+</div>
+
+<!-- ======================================================================== -->
+<!-- VARIANT 1: Context Hub                                                    -->
+<!-- ======================================================================== -->
+<div class="variant">
+  <div class="variant-label">
+    <span class="num">01</span>
+    <span class="name">Context Hub</span>
+    <span class="tagline">上下文联动面板 · 对话即学习 · <em>随堂题目自动落盘</em></span>
+  </div>
+
+  <div class="shell">
+    <!-- Sidebar -->
+    <div class="sb">
+      <div class="sb-brand">
+        <div class="sb-dot"></div>
+        <span class="sb-name">MemorAI</span>
+      </div>
+      <nav class="sb-nav">
+        <a class="sb-link on"><span class="sb-ico">◆</span><span class="sb-lbl">AI 问答</span></a>
+        <a class="sb-link"><span class="sb-ico">▣</span><span class="sb-lbl">知识库</span></a>
+        <a class="sb-link"><span class="sb-ico">○</span><span class="sb-lbl">简历解析</span></a>
+      </nav>
+      <div class="sb-bot">
+        <a class="sb-link"><span class="sb-ico">⚙</span><span class="sb-lbl">知识库管理</span></a>
+        <a class="sb-link"><span class="sb-ico">☰</span><span class="sb-lbl">ES 管理</span></a>
+      </div>
+    </div>
+
+    <!-- Chat -->
+    <div class="chat">
+      <div class="chat-hd">
+        <span class="chat-hd-title">AI 学习助手</span>
+        <span class="chat-hd-badge">会话 #1042</span>
+      </div>
+      <div class="chat-msgs scroll">
+        <!-- msg 1 -->
+        <div class="msg user">
+          <div class="msg-av">U</div>
+          <div class="msg-bd">
+            <div class="msg-bub">帮我复习一下 <code>Java 并发</code>，考我几道题</div>
+          </div>
+        </div>
+        <!-- msg 2 - agent tool call -->
+        <div class="msg assistant">
+          <div class="msg-av av-ai">AI</div>
+          <div class="msg-bd">
+            <div class="msg-bub">
+              <span class="tool-tag">knowledgeRetrieval</span>
+              检索知识库中关于 Java 并发的核心概念...
+            </div>
+          </div>
+        </div>
+        <!-- msg 3 -->
+        <div class="msg assistant">
+          <div class="msg-av av-ai">AI</div>
+          <div class="msg-bd">
+            <div class="msg-bub">
+              Java 并发的核心包括：<code>synchronized</code>、<code>volatile</code>、<code>Lock</code>、线程池参数、CAS、AQS 等。<br>
+              来，考你一道题：
+            </div>
+          </div>
+        </div>
+        <!-- msg 4 - tool call quiz -->
+        <div class="msg assistant" style="position:relative;">
+          <div class="msg-av av-ai">AI</div>
+          <div class="msg-bd">
+            <div class="msg-bub">
+              <span class="tool-tag">quizGeneration</span><br>
+              <strong>Q:</strong> 以下关于 <code>synchronized</code> 关键字的说法，错误的是？<br>
+              A. 可以修饰实例方法、静态方法和代码块<br>
+              B. 底层通过 Monitor 实现<br>
+              C. JDK 6 之后引入了偏向锁和轻量级锁优化<br>
+              D. 使用 <code>synchronized</code> 可以保证可见性、有序性和原子性<br>
+              <span style="color:var(--accent);font-size:11px;">选一个答案告诉我</span>
+            </div>
+            <!-- Connector arrow pointing to panel -->
+            <div class="connector" style="right:-16px;top:8px;">
+              <svg width="20" height="30" viewBox="0 0 20 30" fill="none">
+                <path d="M0 15 L20 15 M10 5 L20 15 L10 25" stroke="rgba(167,139,250,0.3)" stroke-width="1.5" fill="none"/>
+              </svg>
+            </div>
+          </div>
+        </div>
+        <!-- msg 5 user -->
+        <div class="msg user">
+          <div class="msg-av">U</div>
+          <div class="msg-bd">
+            <div class="msg-bub">我选 D，synchronized 不保证有序性？不对… 应该是 C？等等，答案选 D？</div>
+          </div>
+        </div>
+        <!-- msg 6 - grading -->
+        <div class="msg assistant">
+          <div class="msg-av av-ai">AI</div>
+          <div class="msg-bd">
+            <div class="msg-bub">
+              <span class="tool-tag" style="color:var(--green);background:var(--green-dim);">autoGrading</span>
+              ✅ <strong>正确！</strong><br>
+              synchronized 可以保证可见性、有序性和原子性。JMM 规定：线程解锁前，必须把共享变量的最新值刷新到主内存 —— 这就是可见性；synchronized 块内的代码相当于一个临界区，同一时刻只有一个线程执行 —— 这就是原子性；同时加锁也隐含了 happens-before 规则 —— 这就是有序性。<br>
+              <span style="color:var(--text-mut);font-size:11px;">→ 错题已自动记录，右侧面板可查看</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="chat-inp">
+        <div class="chat-inp-fake">继续出题，考我 JVM 吧...</div>
+        <div class="chat-inp-btn">→</div>
+      </div>
+    </div>
+
+    <!-- Panel: Context Hub -->
+    <div class="panel p1">
+      <div class="p1-hd">
+        <span class="p1-hd-tab on">随堂题目 <span class="badge">2</span></span>
+        <span class="p1-hd-tab">智能分析</span>
+        <span class="p1-hd-tab">复习计划</span>
+      </div>
+      <div class="panel-wrap scroll">
+        <!-- 随堂题目 -->
+        <div class="p1-sec">
+          <div class="p1-sec-hd"><span class="ico">📋</span> 随堂题目 · 来自对话</div>
+          <div class="p1-card">
+            <span class="tag java">Java 并发</span>
+            <div class="q">关于 <code>synchronized</code> 的说法，错误的是？</div>
+            <div class="meta">
+              <span class="status done">✅ 已作答</span>
+              <span class="src">来自对话 · 刚刚</span>
+            </div>
+          </div>
+          <div class="p1-card" style="border-left:2px solid var(--violet);">
+            <span class="tag jvm">JVM</span>
+            <div class="q">待生成 · 你提到了 JVM，点击出题</div>
+            <div class="meta">
+              <span class="status pending">⏳ 待处理</span>
+              <span class="src">来自对话 · 输入框</span>
+            </div>
+          </div>
+        </div>
+        <!-- 智能分析 -->
+        <div class="p1-sec">
+          <div class="p1-sec-hd"><span class="ico">📊</span> 薄弱点分析</div>
+          <div class="radar-wrap">
+            <svg class="radar-svg" viewBox="0 0 100 100">
+              <!-- Radar grid -->
+              <polygon points="50,5 80,20 90,55 65,85 35,85 10,55 20,20" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="0.5"/>
+              <polygon points="50,15 72,27 78,52 62,72 38,72 22,52 28,27" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="0.5"/>
+              <polygon points="50,25 65,34 68,49 58,62 42,62 32,49 35,34" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="0.5"/>
+              <!-- Data area -->
+              <polygon points="50,15 65,34 60,58 58,72 42,62 32,55 45,26"
+                fill="rgba(167,139,250,0.08)" stroke="rgba(167,139,250,0.25)" stroke-width="0.5"/>
+              <!-- Labels -->
+              <text x="50" y="2" font-size="6" text-anchor="middle" fill="var(--text-mut)">JMM</text>
+              <text x="85" y="22" font-size="6" text-anchor="middle" fill="var(--text-mut)">并发</text>
+              <text x="93" y="58" font-size="6" text-anchor="start" fill="var(--text-mut)">JVM</text>
+              <text x="65" y="90" font-size="6" text-anchor="middle" fill="var(--text-mut)">Spring</text>
+              <text x="35" y="90" font-size="6" text-anchor="middle" fill="var(--text-mut)">MySQL</text>
+              <text x="5" y="58" font-size="6" text-anchor="end" fill="var(--text-mut)">网络</text>
+              <text x="15" y="22" font-size="6" text-anchor="middle" fill="var(--text-mut)">设计</text>
+            </svg>
+          </div>
+          <ul class="weak-list">
+            <li><span style="display:inline-block;width:42px;font-size:10px;color:var(--text-mut);">JVM</span><span class="bar" style="background:linear-gradient(90deg,var(--red),var(--amber));width:65%"></span><span class="pct">35%</span></li>
+            <li><span style="display:inline-block;width:42px;font-size:10px;color:var(--text-mut);">并发</span><span class="bar" style="background:linear-gradient(90deg,var(--red),var(--amber),var(--green));width:55%"></span><span class="pct">58%</span></li>
+            <li><span style="display:inline-block;width:42px;font-size:10px;color:var(--text-mut);">Spring</span><span class="bar" style="background:linear-gradient(90deg,var(--red),var(--amber),var(--green),var(--accent));width:40%"></span><span class="pct">72%</span></li>
+          </ul>
+        </div>
+        <!-- 复习计划 -->
+        <div class="p1-sec">
+          <div class="p1-sec-hd"><span class="ico">📅</span> 复习计划</div>
+          <div class="tl">
+            <div class="tl-item cur">
+              <div class="tl-title">📘 JVM 内存模型 & 类加载</div>
+              <div class="tl-sub">今日 · 薄弱点优先级最高</div>
+            </div>
+            <div class="tl-item ok">
+              <div class="tl-title">✅ 并发编程 (已完成)</div>
+              <div class="tl-sub">5/5 题 · 掌握度 80%</div>
+            </div>
+            <div class="tl-item">
+              <div class="tl-title">📗 Spring 事务 & AOP</div>
+              <div class="tl-sub">明日 · 掌握度 72%</div>
+            </div>
+            <div class="tl-item">
+              <div class="tl-title">📙 MySQL 索引 & 锁</div>
+              <div class="tl-sub">后天 · 计划复习</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<hr class="vdiv-line">
+
+<!-- ======================================================================== -->
+<!-- VARIANT 2: Mastery Dashboard                                             -->
+<!-- ======================================================================== -->
+<div class="variant">
+  <div class="variant-label">
+    <span class="num">02</span>
+    <span class="name">Mastery Dashboard</span>
+    <span class="tagline">数据驱动复习 · <em>掌握度环形图 + 错题热力图 + 自适应学习路径</em></span>
+  </div>
+
+  <div class="shell">
+    <!-- Sidebar -->
+    <div class="sb">
+      <div class="sb-brand">
+        <div class="sb-dot"></div>
+        <span class="sb-name">MemorAI</span>
+      </div>
+      <nav class="sb-nav">
+        <a class="sb-link on"><span class="sb-ico">◆</span><span class="sb-lbl">AI 问答</span></a>
+        <a class="sb-link"><span class="sb-ico">▣</span><span class="sb-lbl">知识库</span></a>
+        <a class="sb-link"><span class="sb-ico">○</span><span class="sb-lbl">简历解析</span></a>
+      </nav>
+      <div class="sb-bot">
+        <a class="sb-link"><span class="sb-ico">⚙</span><span class="sb-lbl">知识库管理</span></a>
+        <a class="sb-link"><span class="sb-ico">☰</span><span class="sb-lbl">ES 管理</span></a>
+      </div>
+    </div>
+
+    <!-- Chat -->
+    <div class="chat">
+      <div class="chat-hd">
+        <span class="chat-hd-title">AI 学习助手</span>
+        <span class="chat-hd-badge">会话 #1042 · <span style="color:var(--accent);">话题: JVM</span></span>
+      </div>
+      <div class="chat-msgs scroll">
+        <div class="msg user">
+          <div class="msg-av">U</div>
+          <div class="msg-bd"><div class="msg-bub">分析一下我的薄弱点，给我一个复习计划</div></div>
+        </div>
+        <div class="msg assistant">
+          <div class="msg-av av-ai">AI</div>
+          <div class="msg-bd">
+            <div class="msg-bub">
+              <span class="tool-tag">weakPointAnalysis</span>
+              正在分析你在各知识点的答题数据...
+            </div>
+          </div>
+        </div>
+        <div class="msg assistant" style="position:relative;">
+          <div class="msg-av av-ai">AI</div>
+          <div class="msg-bd">
+            <div class="msg-bub">
+              <span class="tool-tag" style="color:var(--green);background:var(--green-dim);">weakPointAnalysis</span>
+              📊 分析完成！<br><br>
+              <strong>当前掌握度概览：</strong><br>
+              · <strong>JVM</strong> <span style="color:var(--red);">35%</span> — 薄弱，类加载和 GC 相关题目错误率高<br>
+              · <strong>Java 并发</strong> <span style="color:var(--amber);">58%</span> — 中等，AQS 和 CAS 需强化<br>
+              · <strong>Spring</strong> <span style="color:var(--green);">72%</span> — 良好，事务传播行为有混淆<br>
+              · <strong>MySQL</strong> <span style="color:var(--green);">68%</span> — 中等，间隙锁和 MVCC 需复习<br><br>
+              <span style="color:var(--text-mut);font-size:11px;">↳ 详细数据已同步至右侧面板</span>
+            </div>
+            <!-- Connector -->
+            <div class="connector" style="right:-16px;top:4px;">
+              <svg width="20" height="40" viewBox="0 0 20 40" fill="none">
+                <path d="M0 20 L20 20 M10 10 L20 20 L10 30" stroke="rgba(56,189,248,0.3)" stroke-width="1.5" fill="none"/>
+              </svg>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="chat-inp">
+        <div class="chat-inp-fake">根据我的薄弱点，生成 JVM 练习题...</div>
+        <div class="chat-inp-btn">→</div>
+      </div>
+    </div>
+
+    <!-- Panel: Mastery Dashboard -->
+    <div class="panel" style="width:320px;background:linear-gradient(180deg,rgba(56,189,248,0.015),transparent 30%);">
+      <div class="p2-hd">
+        <span class="p2-hd-label">掌握度仪表盘</span>
+        <span class="live">实时</span>
+      </div>
+      <div class="panel-wrap scroll">
+        <!-- Ring charts -->
+        <div class="rings">
+          <div class="ring-item highlight">
+            <div class="ring-canvas" style="background:conic-gradient(var(--accent) 0deg 126deg, var(--red) 126deg 360deg);">
+              <span class="pct">35%</span>
+            </div>
+            <div class="topic" style="color:var(--accent);">JVM</div>
+          </div>
+          <div class="ring-item">
+            <div class="ring-canvas" style="background:conic-gradient(var(--accent) 0deg 209deg, rgba(255,255,255,0.06) 209deg 360deg);">
+              <span class="pct">58%</span>
+            </div>
+            <div class="topic">并发</div>
+          </div>
+          <div class="ring-item">
+            <div class="ring-canvas" style="background:conic-gradient(var(--green) 0deg 259deg, rgba(255,255,255,0.06) 259deg 360deg);">
+              <span class="pct">72%</span>
+            </div>
+            <div class="topic">Spring</div>
+          </div>
+          <div class="ring-item">
+            <div class="ring-canvas" style="background:conic-gradient(var(--green) 0deg 245deg, rgba(255,255,255,0.06) 245deg 360deg);">
+              <span class="pct">68%</span>
+            </div>
+            <div class="topic">MySQL</div>
+          </div>
+        </div>
+
+        <!-- Heatmap -->
+        <div class="heatmap">
+          <div class="heatmap-hd">📅 近7天错题热力图</div>
+          <div class="heatmap-grid">
+            <span class="hm-cell l0"></span><span class="hm-cell l1"></span><span class="hm-cell l0"></span><span class="hm-cell l0"></span><span class="hm-cell l2"></span><span class="hm-cell l1"></span><span class="hm-cell l0"></span>
+            <span class="hm-cell l1"></span><span class="hm-cell l3"></span><span class="hm-cell l2"></span><span class="hm-cell l1"></span><span class="hm-cell l0"></span><span class="hm-cell l0"></span><span class="hm-cell l1"></span>
+            <span class="hm-cell l0"></span><span class="hm-cell l1"></span><span class="hm-cell l4"></span><span class="hm-cell l2"></span><span class="hm-cell l1"></span><span class="hm-cell l0"></span><span class="hm-cell l0"></span>
+            <span class="hm-cell l2"></span><span class="hm-cell l0"></span><span class="hm-cell l1"></span><span class="hm-cell l3"></span><span class="hm-cell l2"></span><span class="hm-cell l1"></span><span class="hm-cell l0"></span>
+            <span class="hm-cell l0"></span><span class="hm-cell l2"></span><span class="hm-cell l1"></span><span class="hm-cell l0"></span><span class="hm-cell l0"></span><span class="hm-cell l3"></span><span class="hm-cell l2"></span>
+            <span class="hm-cell l1"></span><span class="hm-cell l0"></span><span class="hm-cell l0"></span><span class="hm-cell l2"></span><span class="hm-cell l1"></span><span class="hm-cell l0"></span><span class="hm-cell l0"></span>
+            <span class="hm-cell l0"></span><span class="hm-cell l1"></span><span class="hm-cell l2"></span><span class="hm-cell l0"></span><span class="hm-cell l0"></span><span class="hm-cell l1"></span><span class="hm-cell l0"></span>
+          </div>
+          <div class="heatmap-labels">
+            <span>16日 周一</span><span>今天</span>
+          </div>
+        </div>
+
+        <!-- Learning path -->
+        <div class="p2-plan">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+            <span style="font-size:10px;color:var(--text-mut);font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">🎯 AI 推荐学习路径</span>
+            <span style="font-size:8px;color:var(--accent);">基于薄弱点生成</span>
+          </div>
+          <div class="p2-plan-item">
+            <span class="p2-plan-week">W1</span>
+            <div>
+              <span class="p2-plan-tag concept">JVM</span>
+              <div class="p2-plan-desc">类加载机制 + 运行时数据区 + GC 算法 + 调优参数</div>
+            </div>
+          </div>
+          <div class="p2-plan-item">
+            <span class="p2-plan-week">W2</span>
+            <div>
+              <span class="p2-plan-tag practice">并发</span>
+              <div class="p2-plan-desc">AQS 原理 + CAS 实现 + 线程池源码 + JMM 重排序</div>
+            </div>
+          </div>
+          <div class="p2-plan-item">
+            <span class="p2-plan-week">W3</span>
+            <div>
+              <span class="p2-plan-tag deep">MySQL</span>
+              <div class="p2-plan-desc">间隙锁 + MVCC 快照读 + 索引下推 + Explain 实战</div>
+            </div>
+          </div>
+          <div class="p2-plan-item">
+            <span class="p2-plan-week">W4</span>
+            <div>
+              <span class="p2-plan-tag concept">Spring</span>
+              <div class="p2-plan-desc">事务传播行为 + AOP 代理 + 循环依赖三级缓存</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<hr class="vdiv-line">
+
+<!-- ======================================================================== -->
+<!-- VARIANT 3: Study Studio                                                  -->
+<!-- ======================================================================== -->
+<div class="variant">
+  <div class="variant-label">
+    <span class="num">03</span>
+    <span class="name">Study Studio</span>
+    <span class="tagline">沉浸式学习空间 · <em>测验 + 知识图谱 + 参考资料 · 左右分栏协作</em></span>
+  </div>
+
+  <div class="shell">
+    <!-- Sidebar -->
+    <div class="sb">
+      <div class="sb-brand">
+        <div class="sb-dot"></div>
+        <span class="sb-name">MemorAI</span>
+      </div>
+      <nav class="sb-nav">
+        <a class="sb-link on"><span class="sb-ico">◆</span><span class="sb-lbl">AI 问答</span></a>
+        <a class="sb-link"><span class="sb-ico">▣</span><span class="sb-lbl">知识库</span></a>
+        <a class="sb-link"><span class="sb-ico">○</span><span class="sb-lbl">简历解析</span></a>
+      </nav>
+      <div class="sb-bot">
+        <a class="sb-link"><span class="sb-ico">⚙</span><span class="sb-lbl">知识库管理</span></a>
+        <a class="sb-link"><span class="sb-ico">☰</span><span class="sb-lbl">ES 管理</span></a>
+      </div>
+    </div>
+
+    <!-- Chat -->
+    <div class="chat">
+      <div class="chat-hd">
+        <span class="chat-hd-title">AI 学习助手</span>
+        <span class="chat-hd-badge">测验模式</span>
+      </div>
+      <div class="chat-msgs scroll">
+        <div class="msg user">
+          <div class="msg-av">U</div>
+          <div class="msg-bd"><div class="msg-bub">来一次 JVM 综合测验，5 道题</div></div>
+        </div>
+        <div class="msg assistant">
+          <div class="msg-av av-ai">AI</div>
+          <div class="msg-bd">
+            <div class="msg-bub">
+              <span class="tool-tag">knowledgeRetrieval</span>
+              检索 JVM 相关知识点...
+            </div>
+          </div>
+        </div>
+        <div class="msg assistant">
+          <div class="msg-av av-ai">AI</div>
+          <div class="msg-bd">
+            <div class="msg-bub">
+              <span class="tool-tag" style="color:var(--accent);background:var(--accent-glow);">quizGeneration</span>
+              已生成 5 道 JVM 综合题！<br>
+              <span style="color:var(--text-mut);font-size:11px;">↳ 请在右侧面板作答，支持在线编辑和提交批改</span>
+            </div>
+          </div>
+        </div>
+        <div class="msg assistant" style="position:relative;">
+          <div class="msg-av av-ai">AI</div>
+          <div class="msg-bd">
+            <div class="msg-bub">
+              <span class="tool-tag" style="color:var(--green);background:var(--green-dim);">autoGrading</span>
+              检测到你已提交第 1 题答案：<br>
+              你的答案：D · G1 在 JDK 8 中是默认垃圾收集器<br>
+              ❌ <strong>错误</strong> — G1 在 JDK 9 才成为默认收集器，JDK 8 默认是 Parallel Scavenge + Parallel Old<br>
+              <span style="color:var(--text-mut);font-size:11px;">↳ 此错题已录入右侧面板</span>
+            </div>
+            <!-- Connector -->
+            <div class="connector" style="right:-16px;top:8px;">
+              <svg width="20" height="40" viewBox="0 0 20 40" fill="none">
+                <path d="M0 18 L18 18 M10 8 L18 18 L10 28" stroke="rgba(52,211,153,0.3)" stroke-width="1.5" fill="none"/>
+              </svg>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="chat-inp">
+        <div class="chat-inp-fake">提交第 2 题答案：B...</div>
+        <div class="chat-inp-btn">→</div>
+      </div>
+    </div>
+
+    <!-- Panel: Study Studio -->
+    <div class="panel p3">
+      <div class="p3-hd">
+        <span class="p3-hd-tab on">📝 测验中</span>
+        <span class="p3-hd-tab">📌 知识图谱</span>
+        <span class="p3-hd-tab">📖 参考资料</span>
+      </div>
+      <div class="p3-split">
+        <!-- Left: Quiz -->
+        <div class="p3-left scroll">
+          <div class="p3-section">
+            <div class="p3-section-hd"><span style="color:var(--accent);">●</span> 第 1/5 题</div>
+            <div class="p3-q">
+              <strong>以下关于 JVM 垃圾收集器描述错误的是？</strong>
+            </div>
+            <div class="p3-opt"><span class="lbl">A</span> CMS 是并发收集器，目标是低停顿</div>
+            <div class="p3-opt"><span class="lbl">B</span> Parallel Scavenge 注重吞吐量</div>
+            <div class="p3-opt"><span class="lbl">C</span> G1 将堆分为 Region，支持可预测停顿</div>
+            <div class="p3-opt sel bad"><span class="lbl" style="color:var(--red);">D</span> G1 在 JDK 8 中是默认垃圾收集器 <span style="color:var(--red);margin-left:auto;">✗</span></div>
+            <div class="p3-opt ok"><span class="lbl" style="color:var(--green);">E</span> ZGC 在 JDK 11 引入，支持 TB 级堆 <span style="color:var(--green);margin-left:auto;">✓</span></div>
+            <div style="font-size:11px;color:var(--red);padding:4px 0;">正确答案: E · 你的答案: D</div>
+            <div style="font-size:10px;color:var(--text-dim);line-height:1.5;padding:4px 8px;background:var(--bg-glass);border-radius:6px;margin-top:2px;">
+              💡 G1 在 JDK 9 成为默认，JDK 8 默认是 Parallel Scavenge + Parallel Old
+            </div>
+          </div>
+          <div class="p3-section" style="border-top:1px solid var(--border);">
+            <div class="p3-section-hd"><span style="color:var(--text-dim);">●</span> 第 2/5 题</div>
+            <div class="p3-q"><strong>下列关于类加载机制说法正确的是？</strong></div>
+            <div class="p3-opt"><span class="lbl">A</span> 类加载的五个阶段是固定的顺序</div>
+            <div class="p3-opt sel"><span class="lbl">B</span> 双亲委派模型可以防止核心 API 被篡改</div>
+            <div class="p3-opt"><span class="lbl">C</span> 数组类由启动类加载器加载</div>
+            <div class="p3-opt"><span class="lbl">D</span> 类加载器只有三种</div>
+            <div style="font-size:10px;color:var(--text-dim);margin-top:4px;">已选 B · 点击提交批改</div>
+          </div>
+        </div>
+
+        <!-- Right: Draft + Graph -->
+        <div class="p3-right scroll">
+          <div class="p3-section">
+            <div class="p3-section-hd">📝 草稿区</div>
+            <div class="p3-draft">
+              这题的关键是区分 JDK 8 和 9 的默认 GC...<br>
+              G1 在 JDK 7 引入，<span class="hl">JDK 9 才成为默认</span>。<br>
+              所以 D 是错误的。但题目问的是"错误的是"，D 确实错了…<br>
+              但 E 的 ZGC 是 JDK 11 引入的也对的啊？<br>
+              那这题答案应该选 D 和 E 两个？
+            </div>
+          </div>
+          <!-- Knowledge Graph mini -->
+          <div class="p3-section" style="border-top:1px solid var(--border);">
+            <div class="p3-section-hd">🧠 知识图谱 · JVM</div>
+            <div class="graph-wrap">
+              <div class="graph-node core" style="left:50%;top:50%;transform:translate(-50%,-50%);">类加载</div>
+              <div class="graph-node" style="left:8%;top:15%;">运行时<br>数据区</div>
+              <div class="graph-node" style="right:8%;top:15%;">GC 算法</div>
+              <div class="graph-node dim" style="left:5%;bottom:10%;">字节码</div>
+              <div class="graph-node" style="right:5%;bottom:10%;">调优</div>
+              <div class="graph-node dim" style="left:55%;top:5%;">双亲委派</div>
+              <!-- Edges as thin lines -->
+              <svg style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;">
+                <line x1="50%" y1="50%" x2="15%" y2="25%" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+                <line x1="50%" y1="50%" x2="85%" y2="25%" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+                <line x1="50%" y1="50%" x2="15%" y2="75%" stroke="rgba(255,255,255,0.03)" stroke-width="1"/>
+                <line x1="50%" y1="50%" x2="85%" y2="75%" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+                <line x1="50%" y1="50%" x2="55%" y2="15%" stroke="rgba(56,189,248,0.15)" stroke-width="1.5"/>
+              </svg>
+            </div>
+          </div>
+          <!-- References -->
+          <div class="p3-section" style="border-top:1px solid var(--border);">
+            <div class="p3-section-hd">📖 参考资料 · 来自对话</div>
+            <div class="ref-item">
+              <span class="num">1</span>
+              <span class="txt">JVM 垃圾收集器对比 · CMS vs G1 vs ZGC</span>
+              <span class="tag">知识库</span>
+            </div>
+            <div class="ref-item">
+              <span class="num">2</span>
+              <span class="txt">类加载机制 · 双亲委派模型详解</span>
+              <span class="tag">知识库</span>
+            </div>
+            <div class="ref-item">
+              <span class="num">3</span>
+              <span class="txt">JDK 8/9/11/17 GC 默认策略变更历史</span>
+              <span class="tag" style="background:var(--green-dim);color:var(--green);">对话</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ====== Footer ====== -->
+<div class="page-ft">设计示意 — 架构验证阶段 · MemorAI × Agent-LearningPanel Integration</div>
+
+</body>
+</html>

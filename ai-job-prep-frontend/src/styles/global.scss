@@ -1,0 +1,203 @@
+@import url('https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@800&f[]=satoshi@400,500,700&display=swap');
+
+:root, html[data-theme="dark"] {
+  --bg-root: #08080c;
+  --bg-sidebar: rgba(8,8,12,0.85);
+  --bg-elevated: #0d0d16;
+  --bg-glass: rgba(255,255,255,0.035);
+  --bg-hover: rgba(255,255,255,0.06);
+  --bg-input: rgba(255,255,255,0.04);
+  --border: rgba(255,255,255,0.06);
+  --border-active: rgba(255,255,255,0.12);
+  --text: #e2e8f0;
+  --text-mut: #94a3b8;
+  --text-dim: #475569;
+  --accent: #38bdf8;
+  --accent-dim: #0284c7;
+  --accent-glow: rgba(56,189,248,0.08);
+  --green: #34d399;
+  --green-dim: rgba(52,211,153,0.12);
+  --red: #f87171;
+  --red-dim: rgba(248,113,113,0.1);
+  --amber: #fbbf24;
+  --rad: 10px;
+  --rad-sm: 8px;
+  --font: 'Satoshi', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-display: 'Cabinet Grotesk', 'Satoshi', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+html[data-theme="light"] {
+  --bg-root: #f8fafc;
+  --bg-sidebar: rgba(248,250,252,0.9);
+  --bg-elevated: #f1f5f9;
+  --bg-glass: rgba(255,255,255,0.7);
+  --bg-hover: rgba(0,0,0,0.04);
+  --bg-input: rgba(0,0,0,0.02);
+  --border: rgba(0,0,0,0.08);
+  --border-active: rgba(2,132,199,0.4);
+  --text: #0f172a;
+  --text-mut: #64748b;
+  --text-dim: #94a3b8;
+  --accent: #0284c7;
+  --accent-dim: #0369a1;
+  --accent-glow: rgba(2,132,199,0.1);
+  --green: #059669;
+  --green-dim: rgba(5,150,105,0.12);
+  --red: #dc2626;
+  --red-dim: rgba(220,38,38,0.1);
+  --amber: #d97706;
+
+  /* Element Plus overrides */
+  --el-bg-color-overlay: rgba(255,255,255,0.92);
+  --el-box-shadow: 0 8px 32px rgba(0,0,0,0.06);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #app {
+  height: 100%;
+  background: var(--bg-root);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+body::before {
+  content: '';
+  position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(circle at 20% 30%, rgba(56,189,248,0.04), transparent 60%),
+    radial-gradient(circle at 80% 70%, rgba(56,189,248,0.02), transparent 50%);
+}
+
+/* ========== Element Plus overrides ========== */
+:root {
+  --el-color-primary: var(--accent);
+  --el-color-primary-light-3: rgba(56,189,248,0.25);
+  --el-color-primary-light-5: rgba(56,189,248,0.15);
+  --el-color-primary-light-7: rgba(56,189,248,0.08);
+  --el-color-primary-light-9: rgba(56,189,248,0.04);
+  --el-color-primary-dark-2: var(--accent-dim);
+  --el-bg-color: var(--bg-glass);
+  --el-bg-color-overlay: rgba(12,12,16,0.96);
+  --el-bg-color-page: var(--bg-root);
+  --el-border-color: var(--border);
+  --el-border-color-light: var(--border);
+  --el-border-color-lighter: var(--border);
+  --el-text-color-primary: var(--text);
+  --el-text-color-regular: var(--text-mut);
+  --el-text-color-secondary: var(--text-dim);
+  --el-fill-color-blank: var(--bg-input);
+  --el-fill-color: var(--bg-glass);
+  --el-fill-color-light: var(--bg-hover);
+  --el-border-radius-base: var(--rad-sm);
+  --el-box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+}
+
+.el-button {
+  font-family: var(--font); font-weight: 500; border-radius: var(--rad-sm); backdrop-filter: blur(8px);
+}
+.el-button--primary {
+  --el-button-bg-color: var(--accent);
+  --el-button-border-color: transparent;
+  --el-button-text-color: #fff;
+  --el-button-hover-bg-color: var(--accent-dim);
+  --el-button-hover-text-color: #fff;
+  font-weight: 600;
+}
+.el-button:not(.el-button--primary) {
+  --el-button-bg-color: var(--bg-glass);
+  --el-button-border-color: var(--border);
+  --el-button-text-color: var(--text-mut);
+  --el-button-hover-bg-color: var(--bg-hover);
+  --el-button-hover-border-color: var(--border-active);
+  --el-button-hover-text-color: var(--text);
+}
+
+.el-card {
+  background: var(--bg-glass) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--rad) !important;
+  color: var(--text) !important;
+  backdrop-filter: blur(12px);
+  box-shadow: none !important;
+}
+
+.el-input__wrapper {
+  background: var(--bg-input) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--rad-sm) !important;
+  box-shadow: none !important;
+  transition: border-color 0.2s, box-shadow 0.2s !important;
+}
+.el-input__wrapper:hover { border-color: var(--border-active) !important; }
+.el-input.is-focus .el-input__wrapper {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px var(--accent-glow) !important;
+}
+.el-input__inner { color: var(--text) !important; font-family: var(--font) !important; }
+.el-textarea__inner {
+  background: var(--bg-input) !important; border: 1px solid var(--border) !important;
+  color: var(--text) !important; font-family: var(--font) !important; border-radius: var(--rad-sm) !important;
+}
+.el-textarea.is-focus .el-textarea__inner {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px var(--accent-glow) !important;
+}
+
+.el-dialog {
+  background: rgba(14,14,20,0.96) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 14px !important;
+  backdrop-filter: blur(20px);
+  box-shadow: 0 24px 64px rgba(0,0,0,0.6) !important;
+}
+.el-dialog__header { border-bottom: 1px solid var(--border); padding: 16px 20px; }
+.el-dialog__title { font-family: var(--font-display); font-weight: 800; font-size: 16px; color: var(--text); }
+.el-radio-button__inner {
+  background: var(--bg-glass) !important; border-color: var(--border) !important;
+  color: var(--text-mut) !important; font-family: var(--font) !important;
+}
+
+.el-table {
+  --el-table-bg-color: var(--bg-glass);
+  --el-table-tr-bg-color: transparent;
+  --el-table-header-bg-color: var(--bg-glass);
+  --el-table-border-color: var(--border);
+  --el-table-text-color: var(--text);
+  --el-table-header-text-color: var(--text-mut);
+  --el-table-row-hover-bg-color: var(--bg-hover);
+}
+.el-table th.el-table__cell { background: var(--bg-glass); font-weight: 600; font-size: 12px; color: var(--text-mut); }
+
+.el-tabs__item { color: var(--text-mut); font-family: var(--font); }
+.el-tabs__item.is-active { color: var(--accent); font-weight: 600; }
+.el-tabs__active-bar { background: var(--accent); }
+
+.el-form-item__label { color: var(--text-mut) !important; font-family: var(--font) !important; }
+.el-pagination button, .el-pager li { color: var(--text-mut) !important; }
+.el-pager li.is-active { color: #fff !important; background: var(--accent) !important; }
+
+.el-select .el-input__wrapper { background: var(--bg-input) !important; }
+.el-select-dropdown { background: var(--bg-glass) !important; backdrop-filter: blur(16px) !important; border: 1px solid var(--border) !important; }
+.el-select-dropdown__item { color: var(--text-mut) !important; }
+.el-select-dropdown__item.hover, .el-select-dropdown__item:hover { background: var(--bg-hover) !important; color: var(--text) !important; }
+.el-select-dropdown__item.selected { color: var(--accent) !important; font-weight: 600; }
+
+.el-progress-bar__outer { background: var(--bg-hover) !important; }
+.el-progress-bar__inner { background: var(--accent) !important; }
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.14); }
+
+::selection { background: rgba(56,189,248,0.25); color: #fff; }
+
+/* Light mode tweaks */
+html[data-theme="light"] .ambient { opacity: 0.2; }
+html[data-theme="light"] .el-dialog { background: rgba(255,255,255,0.95) !important; }
+html[data-theme="light"] .el-message { background: rgba(255,255,255,0.9) !important; }

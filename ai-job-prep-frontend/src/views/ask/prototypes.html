@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>新设计预览</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0d0d0d;
+    color: #e0e0e0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+    padding: 40px;
+  }
+
+  h1 { font-size: 16px; font-weight: 600; margin-bottom: 8px; color: #fff; letter-spacing: .3px; }
+  .sub { font-size: 12px; color: #666; margin-bottom: 28px; }
+
+  .frame {
+    border-radius: 14px;
+    overflow: hidden;
+    border: 1px solid #222;
+    background: #121212;
+    max-width: 860px;
+  }
+
+  /* ====== Full mock with B sidebar ====== */
+  .layout {
+    display: flex;
+    height: 480px;
+    position: relative;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    width: 200px; flex-shrink: 0;
+    background: #161616; border-right: 1px solid rgba(255,255,255,0.06);
+    padding: 24px 12px; display: flex; flex-direction: column; gap: 2px;
+    overflow-y: auto;
+  }
+  .sb-hdr {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 10px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .35px; color: rgba(255,255,255,0.3);
+    padding: 0 4px 10px 8px;
+  }
+  .sb-hdr .close {
+    width: 18px; height: 18px; border-radius: 4px; border: none;
+    background: transparent; color: rgba(255,255,255,0.2); cursor: default;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px;
+  }
+  .sb-list { display: flex; flex-direction: column; gap: 1px; padding: 0; }
+
+  .sb-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 10px; border-radius: 6px; cursor: default; font-size: 12px;
+    color: rgba(255,255,255,0.55); border: 1px solid transparent;
+    transition: all 0.12s; user-select: none;
+  }
+  .sb-item::before {
+    content: ''; width: 5px; height: 5px; border-radius: 50%;
+    background: currentColor; opacity: 0.35; flex-shrink: 0;
+  }
+  .sb-item:hover {
+    background: rgba(255,255,255,0.04);
+    border-color: rgba(255,255,255,0.06);
+    color: rgba(255,255,255,0.75);
+  }
+  .sb-item.on {
+    background: rgba(56,189,248,0.07);
+    border-color: rgba(56,189,248,0.2);
+    color: rgb(56,189,248);
+  }
+  .sb-item.on::before { opacity: 0.7; }
+  .sb-fn { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sb-chk { font-size: 10px; opacity: 0.5; flex-shrink: 0; }
+  .sb-divider {
+    margin: 8px 8px 4px; border-top: 1px solid rgba(255,255,255,0.06);
+  }
+  .sb-empty { font-size: 11px; color: rgba(255,255,255,0.2); padding: 20px 8px; text-align: center; }
+
+  /* Main area */
+  .main {
+    flex: 1; display: flex; flex-direction: column; min-width: 0;
+    padding: 24px 32px 20px;
+  }
+  .top {
+    display: flex; justify-content: space-between; align-items: center; padding-bottom: 18px;
+  }
+  .top .title { font-weight: 700; font-size: 14px; color: #ccc; }
+  .top .acts { display: flex; gap: 6px; align-items: center; }
+  .top .acts .btn {
+    padding: 4px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1);
+    background: transparent; color: rgba(255,255,255,0.4); font-size: 11px; cursor: default;
+  }
+  .top .acts .btn-pri { border-color: rgba(56,189,248,0.4); color: rgb(56,189,248); }
+  .top .acts .btn-pri:hover { background: rgba(56,189,248,0.08); }
+
+  .body {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; gap: 8px;
+  }
+  .body h2 { font-size: 22px; font-weight: 700; color: #ddd; }
+  .body p { font-size: 12px; color: rgba(255,255,255,0.3); }
+
+  .input-area {
+    padding: 12px 0 0;
+  }
+  .input-pill {
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 20px; padding: 4px 4px 4px 16px;
+  }
+  .input-pill .f {
+    flex: 1; height: 32px; background: none; border: none;
+    color: rgba(255,255,255,0.3); font-size: 12px;
+  }
+  .input-pill .send {
+    width: 32px; height: 32px; border-radius: 50%; border: none;
+    background: rgb(56,189,248); display: flex; align-items: center; justify-content: center;
+    cursor: default; opacity: 0.4;
+  }
+
+  /* ====== Specs ====== */
+  .specs { margin-top: 24px; display: flex; gap: 24px; flex-wrap: wrap; }
+  .spec { display: flex; align-items: center; gap: 6px; font-size: 11px; color: rgba(255,255,255,0.3); }
+  .spec .sw { width: 8px; height: 8px; border-radius: 2px; }
+
+  .note { font-size: 11px; color: rgba(255,255,255,0.2); margin-top: 20px; }
+</style>
+</head>
+<body>
+
+<h1>B 方案 · 已实现</h1>
+<p class="sub">左侧深色面板 · 圆点指示器 · 对勾选中态 · 分隔线 + 不关联简历</p>
+
+<div class="frame">
+  <div class="layout">
+
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <div class="sb-hdr">
+        <span>简历</span>
+        <span class="close">✕</span>
+      </div>
+      <div class="sb-list">
+        <div class="sb-item on">
+          <span class="sb-fn">高级Java开发.pdf</span>
+          <span class="sb-chk">✓</span>
+        </div>
+        <div class="sb-item">
+          <span class="sb-fn">全栈工程师.pdf</span>
+        </div>
+        <div class="sb-item">
+          <span class="sb-fn">Python数据开发.pdf</span>
+        </div>
+      </div>
+      <div class="sb-divider"></div>
+      <div class="sb-item">
+        <span class="sb-fn" style="color:rgba(255,255,255,0.3)">不关联简历</span>
+      </div>
+    </div>
+
+    <!-- Main -->
+    <div class="main">
+      <div class="top">
+        <span class="title">AI 学习助手</span>
+        <div class="acts">
+          <span class="btn">切换</span>
+          <span class="btn btn-pri">+ 新对话</span>
+        </div>
+      </div>
+      <div class="body">
+        <h2>Agent 问答</h2>
+        <p>知识检索 · 智能出题 · 自动批改 · 薄弱点分析</p>
+      </div>
+      <div class="input-area">
+        <div class="input-pill">
+          <div class="f">自由对话，AI 会检索知识库并自动分析...</div>
+          <div class="send">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M2 8L14 2L8 14L6 9L2 8Z" fill="black"/></svg>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="specs">
+  <div class="spec"><span class="sw" style="background:#161616;border:1px solid rgba(255,255,255,0.06)"></span> 侧栏背景 #161616</div>
+  <div class="spec"><span class="sw" style="background:rgba(56,189,248,0.07);border:1px solid rgba(56,189,248,0.2)"></span> 选中态 accent 边框+背景</div>
+  <div class="spec"><span class="sw" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.06)"></span> hover 态微亮</div>
+  <div class="spec"><span class="sw" style="background:transparent;border:1px solid rgba(255,255,255,0.06)"></span> 分隔线</div>
+</div>
+
+<div class="note">← 侧栏关闭时，左上角显示一个小图标按钮用来重新打开</div>
+
+</body>
+</html>

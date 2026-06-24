@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MemorAI — 极简商务 · 方案B</title>
+<link href="https://api.fontshare.com/v2/css?f[]=general-sans@400,500,600,700&f[]=author@500,600&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --accent: #38bdf8;
+  --accent-subtle: rgba(56,189,248,0.08);
+  --bg: #fafaf9;
+  --bg-card: #ffffff;
+  --text: #1a1a1c;
+  --text-mut: #6b7280;
+  --text-dim: #9ca3af;
+  --border: #e5e7eb;
+  --border-focus: #38bdf8;
+  --font-body: 'General Sans', -apple-system, sans-serif;
+  --font-display: 'Author', 'General Sans', serif;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.04);
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ====== Subtle Texture BG ====== */
+.bg-texture {
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background:
+    radial-gradient(ellipse 60% 40% at 30% 20%, rgba(56,189,248,0.03), transparent 60%),
+    radial-gradient(ellipse 50% 50% at 70% 80%, rgba(56,189,248,0.02), transparent 50%);
+}
+
+/* ====== Layout ====== */
+.auth-shell {
+  position: relative; z-index: 1;
+  display: flex; gap: 0; align-items: stretch;
+  max-width: 880px; width: 100%; min-height: 560px;
+  background: var(--bg-card); border-radius: 4px;
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+
+/* ====== Left: Hero Panel ====== */
+.hero {
+  flex: 1; background: #111118;
+  padding: 56px 48px; display: flex; flex-direction: column; justify-content: center;
+  position: relative; overflow: hidden;
+}
+.hero::before {
+  content: ''; position: absolute; inset: 0;
+  background: radial-gradient(ellipse at 30% 20%, rgba(56,189,248,0.12), transparent 60%);
+  pointer-events: none;
+}
+.hero-line {
+  position: absolute; top: 48px; left: 48px; right: 48px;
+  height: 1px; background: rgba(255,255,255,0.06);
+}
+.hero-content { position: relative; z-index: 1; }
+
+.hero-logo { display: flex; align-items: center; gap: 10px; margin-bottom: 48px; }
+.hero-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: #38bdf8;
+}
+.hero-name {
+  font-family: var(--font-display); font-size: 16px; font-weight: 600;
+  color: #fff; letter-spacing: 0.5px;
+}
+
+.hero-quote {
+  font-family: var(--font-display); font-size: 28px; font-weight: 500;
+  color: #e8ecf2; line-height: 1.35; letter-spacing: -0.3px; margin-bottom: 16px;
+}
+.hero-quote i { color: var(--accent); font-style: normal; }
+.hero-sub { font-size: 13px; color: #7b8ca0; line-height: 1.7; }
+
+.hero-stats { display: flex; gap: 32px; margin-top: 48px; }
+.hstat-val {
+  font-family: var(--font-display); font-size: 24px; font-weight: 600; color: #fff;
+}
+.hstat-label { font-size: 11px; color: #7b8ca0; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+/* ====== Right: Auth Panel ====== */
+.auth-panel {
+  flex: 0 0 440px; padding: 56px 52px; display: flex; flex-direction: column; justify-content: center;
+}
+
+.auth-panel h2 {
+  font-family: var(--font-display); font-size: 22px; font-weight: 600;
+  margin-bottom: 4px; letter-spacing: -0.2px;
+}
+.auth-panel .sub {
+  font-size: 13px; color: var(--text-mut); margin-bottom: 36px;
+}
+
+/* form */
+.auth-form { display: flex; flex-direction: column; gap: 18px; }
+
+.field { position: relative; }
+.field-label {
+  display: block; font-size: 11px; font-weight: 500; color: var(--text-mut);
+  margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.4px;
+}
+.field-input {
+  width: 100%; padding: 12px 0; font-size: 15px; font-family: var(--font-body);
+  border: none; border-bottom: 1.5px solid var(--border);
+  background: transparent; color: var(--text); outline: none;
+  transition: border-color 0.25s, padding-left 0.25s;
+}
+.field-input:focus {
+  border-bottom-color: var(--border-focus); padding-left: 4px;
+}
+.field-input::placeholder { color: var(--text-dim); }
+
+.auth-btn {
+  margin-top: 12px; width: 100%; padding: 13px; font-size: 14px;
+  font-family: var(--font-body); font-weight: 600;
+  border: none; border-radius: 4px; cursor: pointer;
+  background: #111118; color: #fff;
+  transition: background 0.2s, transform 0.1s;
+  letter-spacing: 0.2px;
+}
+.auth-btn:hover { background: #1f1f2a; }
+.auth-btn:active { transform: scale(0.995); }
+
+.auth-switch {
+  text-align: center; margin-top: 28px; font-size: 13px; color: var(--text-mut);
+}
+.auth-switch a {
+  color: #111118; text-decoration: none; font-weight: 600;
+  cursor: pointer; padding-bottom: 2px; border-bottom: 1.5px solid #111118;
+  transition: opacity 0.15s;
+}
+.auth-switch a:hover { opacity: 0.7; }
+
+/* mode toggle */
+#register-form { display: none; }
+body.register-mode #login-form { display: none; }
+body.register-mode #register-form { display: block; }
+
+/* subtle animation */
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.auth-panel { animation: fadeSlideIn 0.5s ease-out; }
+</style>
+</head>
+<body class="">
+
+<div class="bg-texture"></div>
+
+<div class="auth-shell">
+  <!-- Hero -->
+  <div class="hero">
+    <div class="hero-line"></div>
+    <div class="hero-content">
+      <div class="hero-logo">
+        <div class="hero-dot"></div>
+        <div class="hero-name">MemorAI</div>
+      </div>
+      <div class="hero-quote">
+        把知识变成<i>面试答案</i>，<br>让每次复习都有<i>回报</i>。
+      </div>
+      <p class="hero-sub">
+        AI 驱动的求职备考平台。上传你的学习资料，<br>自动生成针对性题目，追踪薄弱点，高效提分。
+      </p>
+      <div class="hero-stats">
+        <div><div class="hstat-val">5+</div><div class="hstat-label">AI 工具</div></div>
+        <div><div class="hstat-val">kNN+BM25</div><div class="hstat-label">混合检索</div></div>
+        <div><div class="hstat-val">SSE</div><div class="hstat-label">流式对话</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Auth -->
+  <div class="auth-panel">
+    <h2 id="authTitle">登录</h2>
+    <p class="sub" id="authSub">欢迎回来，继续你的备考进度</p>
+
+    <!-- Login -->
+    <form id="login-form" class="auth-form" onsubmit="return handleLogin(event)">
+      <div class="field">
+        <label class="field-label">用户名</label>
+        <input class="field-input" type="text" id="loginUser" placeholder="你的用户名" autocomplete="username">
+      </div>
+      <div class="field">
+        <label class="field-label">密码</label>
+        <input class="field-input" type="password" id="loginPass" placeholder="······" autocomplete="current-password">
+      </div>
+      <button class="auth-btn" type="submit">登录</button>
+    </form>
+
+    <!-- Register -->
+    <form id="register-form" class="auth-form" onsubmit="return handleRegister(event)">
+      <div class="field">
+        <label class="field-label">用户名</label>
+        <input class="field-input" type="text" id="regUser" placeholder="2-50 个字符" autocomplete="off">
+      </div>
+      <div class="field">
+        <label class="field-label">密码</label>
+        <input class="field-input" type="password" id="regPass" placeholder="至少 6 位字符" autocomplete="new-password">
+      </div>
+      <button class="auth-btn" type="submit">创建账号</button>
+    </form>
+
+    <div class="auth-switch" id="switchText">
+      还没有账号？<a href="#" onclick="toggleMode(); return false">立即注册</a>
+    </div>
+  </div>
+</div>
+
+<script>
+function toggleMode() {
+  document.body.classList.toggle('register-mode');
+  var r = document.body.classList.contains('register-mode');
+  document.getElementById('authTitle').textContent = r ? '注册' : '登录';
+  document.getElementById('authSub').textContent = r ? '创建 MemorAI 账号，开启智能备考' : '欢迎回来，继续你的备考进度';
+  document.getElementById('switchText').innerHTML = r
+    ? '已有账号？<a href="#" onclick="toggleMode(); return false">去登录</a>'
+    : '还没有账号？<a href="#" onclick="toggleMode(); return false">立即注册</a>';
+}
+function handleLogin(e) { e.preventDefault(); console.log('Login:', document.getElementById('loginUser').value); return false; }
+function handleRegister(e) { e.preventDefault(); console.log('Register:', document.getElementById('regUser').value); return false; }
+</script>
+</body>
+</html>

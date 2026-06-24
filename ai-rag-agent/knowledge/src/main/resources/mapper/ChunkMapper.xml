@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.jobai.knowledge.mapper.ChunkMapper">
+
+    <insert id="insertBatch">
+        INSERT INTO chunk (doc_id, kb_id, content, heading_path, chunk_index, token_count, vector_id, created_at)
+        VALUES
+        <foreach collection="list" item="chunk" separator=",">
+            (#{chunk.docId}, #{chunk.kbId}, #{chunk.content}, #{chunk.headingPath},
+             #{chunk.chunkIndex}, #{chunk.tokenCount}, #{chunk.vectorId}, NOW())
+        </foreach>
+    </insert>
+
+</mapper>

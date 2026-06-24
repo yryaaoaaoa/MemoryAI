@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MemorAI — 活力现代 · 方案C</title>
+<link href="https://api.fontshare.com/v2/css?f[]=chillax@500,600,700&f[]=ranade@400,500,600&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --accent: #38bdf8;
+  --accent2: #f472b6;
+  --accent3: #a78bfa;
+  --accent4: #34d399;
+  --bg: #0a0a10;
+  --card: rgba(16,18,30,0.9);
+  --border: rgba(255,255,255,0.07);
+  --text: #ecedf0;
+  --text-mut: #80889a;
+  --text-dim: #4a5060;
+  --input-bg: rgba(255,255,255,0.04);
+  --font-body: 'Ranade', -apple-system, sans-serif;
+  --font-display: 'Chillax', 'Ranade', sans-serif;
+  --rad-xl: 28px;
+  --rad-lg: 18px;
+  --rad-md: 12px;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ====== Animated Gradient Mesh ====== */
+.mesh {
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+}
+.mesh-blob {
+  position: absolute; border-radius: 50%; filter: blur(140px); opacity: 0.3;
+  animation: blobFloat 14s ease-in-out infinite;
+}
+.mesh-blob:nth-child(1) {
+  width: 500px; height: 500px;
+  background: radial-gradient(circle, rgba(56,189,248,0.35), transparent 70%);
+  top: -10%; left: -5%; animation-delay: 0s;
+}
+.mesh-blob:nth-child(2) {
+  width: 420px; height: 420px;
+  background: radial-gradient(circle, rgba(244,114,182,0.3), transparent 70%);
+  top: 50%; right: -10%; animation-delay: -5s;
+}
+.mesh-blob:nth-child(3) {
+  width: 360px; height: 360px;
+  background: radial-gradient(circle, rgba(167,139,250,0.25), transparent 70%);
+  bottom: -15%; left: 30%; animation-delay: -10s;
+}
+@keyframes blobFloat {
+  0%, 100% { transform: translate(0, 0) scale(1) rotate(0deg); }
+  33% { transform: translate(80px, -50px) scale(1.1) rotate(3deg); }
+  66% { transform: translate(-40px, 60px) scale(0.9) rotate(-2deg); }
+}
+
+/* ====== Layout ====== */
+.auth-stage {
+  position: relative; z-index: 2;
+  display: flex; gap: 60px; align-items: center;
+  max-width: 1000px; width: 100%; padding: 40px;
+}
+
+/* ====== Left: Brand with Duotone ====== */
+.hero-zone { flex: 1; }
+
+.hero-badge {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 16px; border-radius: 100px;
+  background: rgba(56,189,248,0.1); border: 1px solid rgba(56,189,248,0.15);
+  font-size: 12px; color: var(--accent); font-weight: 500; margin-bottom: 36px;
+}
+.hero-badge-dot {
+  width: 5px; height: 5px; border-radius: 50%; background: var(--accent);
+  animation: dotPulse 2s ease-in-out infinite;
+}
+@keyframes dotPulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+.hero-logo { display: flex; align-items: center; gap: 12px; margin-bottom: 36px; }
+.hero-dot {
+  width: 12px; height: 12px; border-radius: 50%; background: var(--accent);
+  box-shadow: 0 0 20px rgba(56,189,248,0.4), 0 0 48px rgba(56,189,248,0.2);
+}
+.hero-name {
+  font-family: var(--font-display); font-size: 24px; font-weight: 700; letter-spacing: -0.5px;
+}
+
+.hero-h1 {
+  font-family: var(--font-display); font-size: 48px; font-weight: 700;
+  line-height: 1.1; letter-spacing: -1.5px; margin-bottom: 16px;
+}
+.hero-h1 .hl {
+  background: linear-gradient(135deg, var(--accent), var(--accent3));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.hero-h1 .hp {
+  background: linear-gradient(135deg, var(--accent2), var(--accent));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.hero-p { font-size: 15px; color: var(--text-mut); line-height: 1.8; max-width: 380px; }
+
+/* floating emoji tags */
+.hero-tags { display: flex; gap: 10px; margin-top: 32px; flex-wrap: wrap; }
+.htag {
+  display: flex; align-items: center; gap: 6px;
+  padding: 10px 18px; border-radius: 100px;
+  background: var(--card); border: 1px solid var(--border); backdrop-filter: blur(12px);
+  font-size: 13px; color: var(--text-mut); transition: border-color 0.2s, transform 0.2s;
+  cursor: default;
+}
+.htag:hover { border-color: var(--accent); transform: translateY(-2px); }
+.htag-emoji { font-size: 16px; }
+
+/* ====== Right: Card ====== */
+.auth-wrap { flex: 0 0 420px; }
+
+.auth-card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--rad-xl); padding: 48px 42px;
+  backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+  position: relative; overflow: hidden;
+}
+/* top gradient accent line */
+.auth-card::before {
+  content: ''; position: absolute; top: 0; left: 24px; right: 24px;
+  height: 2px; border-radius: 0 0 2px 2px;
+  background: linear-gradient(90deg, var(--accent), var(--accent3), var(--accent2));
+}
+
+.auth-title {
+  font-family: var(--font-display); font-size: 26px; font-weight: 700; margin-bottom: 4px;
+  letter-spacing: -0.5px;
+}
+.auth-sub { font-size: 13px; color: var(--text-mut); margin-bottom: 32px; }
+
+/* form */
+.auth-form { display: flex; flex-direction: column; gap: 16px; }
+
+.input-wrap { position: relative; }
+.input-wrap .iw-icon {
+  position: absolute; left: 16px; top: 50%; transform: translateY(-50%);
+  font-size: 15px; color: var(--text-dim); transition: color 0.25s; pointer-events: none;
+}
+.auth-input {
+  width: 100%; padding: 14px 16px 14px 42px; font-size: 14px; font-family: var(--font-body);
+  background: var(--input-bg); border: 1.5px solid var(--border);
+  border-radius: var(--rad-md); color: var(--text); outline: none;
+  transition: border-color 0.25s, box-shadow 0.25s, background 0.25s;
+}
+.auth-input:focus {
+  border-color: var(--accent); box-shadow: 0 0 0 4px rgba(56,189,248,0.1);
+  background: rgba(56,189,248,0.03);
+}
+.auth-input:focus ~ .iw-icon,
+.input-wrap:focus-within .iw-icon { color: var(--accent); }
+.auth-input::placeholder { color: var(--text-dim); }
+
+/* inline icon wrapper (no sibling selector for prev) */
+.input-wrap:has(.auth-input:focus) .iw-icon { color: var(--accent); }
+
+.auth-btn {
+  margin-top: 10px; width: 100%; padding: 15px; font-size: 15px;
+  font-family: var(--font-body); font-weight: 600;
+  border: none; border-radius: var(--rad-md); cursor: pointer;
+  background: linear-gradient(135deg, var(--accent), var(--accent3));
+  color: #fff; position: relative; overflow: hidden;
+  transition: transform 0.15s, box-shadow 0.25s;
+}
+.auth-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 30px rgba(56,189,248,0.25);
+}
+.auth-btn:active { transform: translateY(0) scale(0.99); }
+
+/* ripple effect */
+.auth-btn::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,0.2), transparent 50%);
+  opacity: 0; transition: opacity 0.3s;
+}
+.auth-btn:hover::after { opacity: 1; }
+
+.auth-switch {
+  text-align: center; margin-top: 24px; font-size: 13px; color: var(--text-mut);
+}
+.auth-switch a {
+  color: var(--accent); text-decoration: none; font-weight: 600; cursor: pointer;
+  transition: color 0.2s;
+}
+.auth-switch a:hover { color: var(--accent3); }
+
+/* social login mock */
+.social-row {
+  display: flex; gap: 10px; margin-top: 20px; padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+.social-btn {
+  flex: 1; padding: 10px; border-radius: var(--rad-md);
+  background: var(--input-bg); border: 1px solid var(--border);
+  cursor: pointer; font-size: 14px; text-align: center;
+  color: var(--text-mut); transition: all 0.2s;
+  font-family: var(--font-body);
+}
+.social-btn:hover { border-color: var(--border-focus, var(--accent)); background: rgba(56,189,248,0.04); }
+
+/* mode toggle */
+#register-form { display: none; }
+body.register-mode #login-form { display: none; }
+body.register-mode #register-form { display: block; }
+body.register-mode .social-row { display: none; }
+
+/* card enter animation */
+.auth-card {
+  animation: cardEnter 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes cardEnter {
+  from { opacity: 0; transform: translateY(20px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+</style>
+</head>
+<body class="">
+
+<div class="mesh">
+  <div class="mesh-blob"></div><div class="mesh-blob"></div><div class="mesh-blob"></div>
+</div>
+
+<div class="auth-stage">
+  <!-- Hero -->
+  <div class="hero-zone">
+    <div class="hero-badge">
+      <span class="hero-badge-dot"></span> AI 驱动的智能备考平台
+    </div>
+    <div class="hero-logo">
+      <div class="hero-dot"></div>
+      <div class="hero-name">MemorAI</div>
+    </div>
+    <h1 class="hero-h1">
+      <span class="hl">学得更聪明</span><br>
+      <span class="hp">考得更从容</span>
+    </h1>
+    <p class="hero-p">
+      把复习资料变成智能题库，用 AI 找出你的薄弱环节。
+      不再盲目刷题，让每一次练习都精准有效。
+    </p>
+    <div class="hero-tags">
+      <div class="htag"><span class="htag-emoji">🏗</span> 向量知识库</div>
+      <div class="htag"><span class="htag-emoji">✍</span> 智能出题</div>
+      <div class="htag"><span class="htag-emoji">🎯</span> 弱点分析</div>
+      <div class="htag"><span class="htag-emoji">📊</span> 学习计划</div>
+    </div>
+  </div>
+
+  <!-- Card -->
+  <div class="auth-wrap">
+    <div class="auth-card">
+      <div class="auth-title" id="authTitle">Hey, 开始学习</div>
+      <div class="auth-sub" id="authSub">登录 MemorAI，继续你的备考之旅</div>
+
+      <!-- Login -->
+      <form id="login-form" class="auth-form" onsubmit="return handleLogin(event)">
+        <div class="input-wrap">
+          <span class="iw-icon">👤</span>
+          <input class="auth-input" type="text" id="loginUser" placeholder="用户名" autocomplete="username">
+        </div>
+        <div class="input-wrap">
+          <span class="iw-icon">🔒</span>
+          <input class="auth-input" type="password" id="loginPass" placeholder="密码" autocomplete="current-password">
+        </div>
+        <button class="auth-btn" type="submit">登录</button>
+      </form>
+
+      <!-- Register -->
+      <form id="register-form" class="auth-form" onsubmit="return handleRegister(event)">
+        <div class="input-wrap">
+          <span class="iw-icon">👤</span>
+          <input class="auth-input" type="text" id="regUser" placeholder="用户名 (2-50 字符)" autocomplete="off">
+        </div>
+        <div class="input-wrap">
+          <span class="iw-icon">🔒</span>
+          <input class="auth-input" type="password" id="regPass" placeholder="密码 (至少 6 位)" autocomplete="new-password">
+        </div>
+        <button class="auth-btn" type="submit">创建账号</button>
+      </form>
+
+      <!-- Social row (login only) -->
+      <div class="social-row">
+        <button class="social-btn" title="Google">Google</button>
+        <button class="social-btn" title="GitHub">GitHub</button>
+        <button class="social-btn" title="微信">微信</button>
+      </div>
+
+      <div class="auth-switch" id="switchText">
+        新来的？<a href="#" onclick="toggleMode(); return false">立即注册</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function toggleMode() {
+  document.body.classList.toggle('register-mode');
+  var r = document.body.classList.contains('register-mode');
+  document.getElementById('authTitle').textContent = r ? '加入 MemorAI' : 'Hey, 开始学习';
+  document.getElementById('authSub').textContent = r ? '创建账号，解锁全部 AI 备考功能' : '登录 MemorAI，继续你的备考之旅';
+  document.getElementById('switchText').innerHTML = r
+    ? '已有账号？<a href="#" onclick="toggleMode(); return false">去登录</a>'
+    : '新来的？<a href="#" onclick="toggleMode(); return false">立即注册</a>';
+}
+function handleLogin(e) { e.preventDefault(); console.log('Login:', document.getElementById('loginUser').value); return false; }
+function handleRegister(e) { e.preventDefault(); console.log('Register:', document.getElementById('regUser').value); return false; }
+</script>
+</body>
+</html>
