@@ -3,6 +3,8 @@ package com.jobai.api.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jobai.agent.tool.KnowledgeRetrievalTool;
 import com.jobai.common.JobAiProperties;
+import com.jobai.common.BusinessException;
+import com.jobai.common.ErrorCode;
 import com.jobai.common.auth.AuthContext;
 import com.jobai.rag.service.ChatSessionService;
 import jakarta.annotation.PostConstruct;
@@ -96,6 +98,11 @@ public class StreamingChatService {
                 .build();
     }
 
+    public void requireKnowledgeBaseAvailable() {
+        if (!properties.getRag().isEnabled() || retrievalTool == null)
+            throw new BusinessException(ErrorCode.SERVICE_UNAVAILABLE, "知识库检索当前不可用，请关闭“知识库检索”后重试");
+    }
+
     /**
      * 异步流式聊天响应到 SSE 发射器。
      * 返回包含完整响应文本的 Future，供持久化使用。
@@ -104,6 +111,14 @@ public class StreamingChatService {
     public CompletableFuture<String> streamChat(String userMessage, List<Map<String, Object>> history,
                                                  SseEmitter emitter, Long sessionId, Long userId,
                                                  String summariesText, String resumeText, Integer replyOrder) {
+        return streamChat(userMessage, history, emitter, sessionId, userId, summariesText, resumeText, replyOrder, false);
+    }
+
+    @Async("streamingExecutor")
+    public CompletableFuture<String> streamChat(String userMessage, List<Map<String, Object>> history,
+                                                 SseEmitter emitter, Long sessionId, Long userId,
+                                                 String summariesText, String resumeText, Integer replyOrder,
+                                                 boolean useKnowledgeBase) {
         AuthContext.set(userId, "user");
         AtomicBoolean stopped = new AtomicBoolean();
         AtomicReference<InputStream> upstream = new AtomicReference<>();
@@ -121,9 +136,9 @@ public class StreamingChatService {
         String errorMessage = null;
         Long savedMessageId = null;
         try {
-            String context = retrievalTool == null ? null : retrievalTool.search(userMessage, 5, rewriteHistory(history));
+            String context = useKnowledgeBase ? retrievalTool.search(userMessage, 5, rewriteHistory(history)) : null;
             if (!stopped.get()) {
-                var messages = buildMessages(userMessage, history, summariesText, resumeText, context);
+                var messages = buildMessages(userMessage, history, summariesText, resumeText, context, useKnowledgeBase);
                 doStream(messages, emitter, fullResponse, tokens, stopped, upstream);
             }
             if (stopped.get()) status = "stopped";
@@ -193,7 +208,8 @@ public class StreamingChatService {
     }
 
     private List<Map<String, Object>> buildMessages(String userMessage, List<Map<String, Object>> history,
-                                                     String summariesText, String resumeText, String context) {
+                                                     String summariesText, String resumeText, String context,
+                                                     boolean useKnowledgeBase) {
         String summariesSection = summariesText != null ? summariesText : "";
         String resumeSection = (resumeText != null && !resumeText.isBlank())
                 ? "## 用户简历信息（供参考）\n" + resumeText + "\n"
@@ -202,7 +218,7 @@ public class StreamingChatService {
                 .replace("{conversationSummaries}", summariesSection)
                 .replace("{resumeInfo}", resumeSection);
 
-        String ragPrompt = retrievalTool == null ? userMessage : RAG_USER_PROMPT_TEMPLATE
+        String ragPrompt = !useKnowledgeBase ? userMessage : RAG_USER_PROMPT_TEMPLATE
                 .replace("{context}", context != null ? context : "（无相关内容）")
                 .replace("{question}", userMessage);
 

@@ -49,7 +49,8 @@ class StreamingChatOrderTest {
             if (!release.await(5, TimeUnit.SECONDS)) throw new AssertionError("test did not release retrieval");
             return "context";
         });
-        var service = new StreamingChatService(new JobAiProperties(), retrieval, chats);
+        var properties = new JobAiProperties(); properties.getRag().setEnabled(true);
+        var service = new StreamingChatService(properties, retrieval, chats);
         var http = mock(HttpClient.class);
         HttpResponse<InputStream> response = mock(HttpResponse.class);
         when(response.statusCode()).thenReturn(200);
@@ -63,7 +64,7 @@ class StreamingChatOrderTest {
         var stopFirst = new AtomicReference<Runnable>();
         doAnswer(i -> { stopFirst.set(i.getArgument(0)); return null; }).when(firstEmitter).onCompletion(any(Runnable.class));
         var firstTurn = chats.beginUserTurn(1L, 10L, "first");
-        var first = CompletableFuture.runAsync(() -> service.streamChat("first", List.of(), firstEmitter, 1L, 10L, "", "", firstTurn.replyOrder()));
+        var first = CompletableFuture.runAsync(() -> service.streamChat("first", List.of(), firstEmitter, 1L, 10L, "", "", firstTurn.replyOrder(), true));
         try {
             assertTrue(entered.await(5, TimeUnit.SECONDS));
             stopFirst.get().run();

@@ -97,6 +97,11 @@ public class RagController {
     @PostMapping("/api/agent/chat/stream")
     public SseEmitter agentChatStream(@CurrentUserId Long userId,
                                        @RequestBody Map<String, Object> body) {
+        Object knowledgeBaseOption = body.get("useKnowledgeBase");
+        if (body.containsKey("useKnowledgeBase") && !(knowledgeBaseOption instanceof Boolean))
+            throw new IllegalArgumentException("useKnowledgeBase 必须为布尔值 true 或 false");
+        boolean useKnowledgeBase = Boolean.TRUE.equals(knowledgeBaseOption);
+        if (useKnowledgeBase) streamingChatService.requireKnowledgeBaseAvailable();
         SseEmitter emitter = new SseEmitter(300_000L);
         String message = (String) body.getOrDefault("message", "");
         if (message == null || message.isBlank()) throw new IllegalArgumentException("消息不能为空");
@@ -119,7 +124,7 @@ public class RagController {
             resumeText = ctx.resumeText();
         }
 
-        streamingChatService.streamChat(message, history, emitter, sessionId, userId, summariesText, resumeText, replyOrder);
+        streamingChatService.streamChat(message, history, emitter, sessionId, userId, summariesText, resumeText, replyOrder, useKnowledgeBase);
         return emitter;
     }
 

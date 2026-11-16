@@ -32,6 +32,7 @@ const noteEditor = ref<{ messages: SourceMessage[]; selectedIds: number[]; note?
 const preparingNote = ref(false)
 
 const inputText = ref('')
+const useKnowledgeBase = ref(false)
 const messages = ref<ChatMessage[]>([])
 const showHot = ref(true)
 const loading = ref(false)
@@ -118,6 +119,7 @@ async function switchSession(id: number) {
 
 function beginSessionChange() {
   stopStreaming()
+  useKnowledgeBase.value = false
   sessionLoading.value = true
   sessionError.value = ''
   messages.value = []
@@ -172,7 +174,7 @@ async function send() {
     timeoutId = setTimeout(() => controller.abort(), 270_000)
     await connectSSE(
       '/api/agent/chat/stream',
-      { message: text, sessionId: sessionId.value },
+      { message: text, sessionId: sessionId.value, useKnowledgeBase: features.ragEnabled && useKnowledgeBase.value },
       {
         onToken(content) {
           assistantMessage.content += content
@@ -457,6 +459,13 @@ function noteSaved(note: LearningNote) {
 
       <!-- Input -->
       <div class="inp-bar">
+        <div v-if="features.ragEnabled" class="inp-options">
+          <button type="button" class="retrieval-toggle" role="switch" aria-label="知识库检索" :aria-checked="useKnowledgeBase"
+            :disabled="loading || sessionLoading || !!sessionError || !sessionId" @click="useKnowledgeBase = !useKnowledgeBase">
+            <span class="retrieval-track" aria-hidden="true"><span></span></span>
+            <span>知识库检索</span>
+          </button>
+        </div>
         <div class="inp-pill">
           <textarea
             v-model="inputText"
@@ -566,6 +575,15 @@ function noteSaved(note: LearningNote) {
 
 /* ====== Input ====== */
 .inp-bar { padding-top: 12px; }
+.inp-options { display: flex; align-items: center; margin-bottom: 10px; }
+.retrieval-toggle { display: inline-flex; align-items: center; gap: 8px; border: 0; background: transparent; color: var(--text-mut); font: 13px var(--font); cursor: pointer; padding: 5px 0; }
+.retrieval-toggle[aria-checked=true] { color: var(--accent); }
+.retrieval-toggle:disabled { cursor: default; opacity: .55; }
+.retrieval-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 3px; }
+.retrieval-track { width: 30px; height: 18px; padding: 2px; border-radius: 10px; background: var(--text-dim); display: inline-flex; align-items: center; }
+.retrieval-track>span { display: block; width: 14px; height: 14px; border-radius: 50%; background: var(--bg-panel); }
+.retrieval-toggle[aria-checked=true] .retrieval-track { background: var(--accent); }
+.retrieval-toggle[aria-checked=true] .retrieval-track>span { transform: translateX(12px); background: var(--on-accent); }
 .inp-pill {
   display: flex; align-items: end; gap: 8px;
   background: var(--bg-glass); border: 1px solid var(--border);
