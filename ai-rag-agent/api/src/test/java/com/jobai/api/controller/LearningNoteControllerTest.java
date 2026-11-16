@@ -62,6 +62,20 @@ class LearningNoteControllerTest {
         verifyNoInteractions(llm);
     }
 
+    @Test void treePayloadRoundTripsAndMalformedHierarchyReturns400() throws Exception {
+        var json = new com.fasterxml.jackson.databind.ObjectMapper();
+        var body = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(valid);
+        String tree = "{\"version\":1,\"nodes\":[{\"id\":\"node-1\",\"title\":\"知识点\",\"body\":\"解释\",\"children\":[]}]}";
+        body.put("treeJson",tree);
+        mvc.perform(post("/api/learning-notes").contentType("application/json").content(json.writeValueAsString(body)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.treeJson").value(tree))
+                .andExpect(jsonPath("$.data.content").value("## 知识点\n\n解释\n"));
+        body.put("treeJson","{\"version\":1,\"nodes\":[]}");
+        mvc.perform(post("/api/learning-notes").contentType("application/json").content(json.writeValueAsString(body)))
+                .andExpect(status().isBadRequest());
+        verify(notes,times(1)).insertOnce(any());
+    }
+
     @Test void legacyPositionFieldsAreIgnoredAndDoNotChangeCreationRetryIdentity() throws Exception {
         String legacy = valid.stripTrailing().replace("}", ",\"sourceRanges\":[{\"id\":1,\"start\":999,\"end\":1000}]}");
         mvc.perform(post("/api/learning-notes").contentType("application/json").content(legacy))

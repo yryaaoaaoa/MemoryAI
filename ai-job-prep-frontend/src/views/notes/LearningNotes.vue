@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { notesApi, noteStatusLabels, type LearningNote, type NoteFields } from '@/api/learning-notes.api'
 import { renderMarkdown } from '@/utils/markdown'
 import { confirmNoteLeave, registerNoteLeaveGuard } from '@/utils/note-leave-guard'
+import NoteBody from '@/components/notes/NoteBody.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -15,6 +16,7 @@ const status = ref('')
 const page = ref(1)
 const note = ref<LearningNote | null>(null)
 const form = reactive<NoteFields>({ title: '', confusion: '', content: '', status: 'PENDING' })
+const bodyEditor = ref<InstanceType<typeof NoteBody>>()
 const editing = ref(false)
 const loading = ref(false)
 const busy = ref(false)
@@ -22,11 +24,11 @@ const error = ref('')
 const conflict = ref(false)
 let requestVersion = 0
 const detail = computed(() => route.params.id !== undefined)
-const dirty = computed(() => editing.value && note.value && ['title', 'confusion', 'content', 'status'].some(key => form[key as keyof NoteFields] !== (note.value![key as keyof NoteFields] ?? '')))
+const dirty = computed(() => editing.value && note.value && ['title', 'confusion', 'content', 'status', 'treeJson'].some(key => (form[key as keyof NoteFields] ?? '') !== (note.value![key as keyof NoteFields] ?? '')))
 const sources = computed(() => note.value?.sources ?? [])
 function fillForm() {
   if (note.value) {
-    Object.assign(form, { title: note.value.title, confusion: note.value.confusion ?? '', content: note.value.content, status: note.value.status })
+    Object.assign(form, { title: note.value.title, confusion: note.value.confusion ?? '', content: note.value.content, status: note.value.status, treeJson: note.value.treeJson ?? null })
   }
 }
 async function load() {
@@ -48,7 +50,9 @@ async function load() {
 watch(() => route.params.id, () => { void load() }, { immediate: true })
 function search() { page.value = 1; void load() }
 async function save() {
+  bodyEditor.value?.finish()
   if (busy.value || !note.value || !form.title.trim() || !form.content.trim()) return
+  if (form.content.length > 40000) { error.value = '正文超过 40000 字，请精简后保存。'; return }
   const id = note.value.id
   const version = requestVersion
   busy.value = true; error.value = ''
@@ -56,7 +60,7 @@ async function save() {
     const updated = await notesApi.update(id, { ...form, title: form.title.trim(), expectedVersion: note.value.version })
     if (version !== requestVersion) return
     note.value = updated
-    fillForm(); editing.value = false; ElMessage.success('学习笔记已保存')
+    fillForm(); editing.value = false; conflict.value = false; ElMessage.success('学习笔记已保存')
   } catch (failure: any) {
     if (version === requestVersion) {
       conflict.value = failure?.response?.status === 409
@@ -174,16 +178,18 @@ async function loadLatest() {
         <el-form v-if="editing" label-position="top" @submit.prevent="save">
           <el-form-item label="标题" required><el-input v-model="form.title" maxlength="120" :disabled="busy" /></el-form-item>
           <el-form-item label="我的困惑（选填）"><el-input v-model="form.confusion" type="textarea" :rows="2" maxlength="4000" :disabled="busy" /></el-form-item>
-          <el-form-item label="笔记正文" required><el-input v-model="form.content" type="textarea" :rows="18" maxlength="40000" :disabled="busy" /></el-form-item>
           <el-form-item label="学习状态"><el-select v-model="form.status" :disabled="busy"><el-option v-for="(label, value) in noteStatusLabels" :key="value" :value="value" :label="label" /></el-select></el-form-item>
-          <el-button type="primary" native-type="submit" :loading="busy" :disabled="busy || !form.title.trim() || !form.content.trim()">保存修改</el-button>
-          <el-button :disabled="busy" @click="fillForm(); editing = false; error = ''; conflict = false">取消编辑</el-button>
         </el-form>
         <article v-else>
           <h1>{{ note.title }}</h1>
           <div v-if="note.confusion" class="note-confusion"><h2>我的困惑</h2><p>{{ note.confusion }}</p></div>
-          <div class="note-markdown" v-html="renderMarkdown(note.content)" />
         </article>
+        <NoteBody :key="note.id" ref="bodyEditor" :content="form.content" :tree-json="form.treeJson" :title="form.title" :editing="editing" :disabled="busy" @edit="editing = true" @change="Object.assign(form, $event); editing = true" />
+        <div v-if="editing" class="note-save-bar">
+          <span>{{ dirty ? '有未保存的修改' : '编辑笔记' }}</span>
+          <el-button :disabled="busy" @click="fillForm(); editing = false; error = ''; conflict = false">取消编辑</el-button>
+          <el-button type="primary" :loading="busy" :disabled="busy || !form.title.trim() || !form.content.trim() || form.content.length > 40000" @mousedown.prevent @click="save">保存修改</el-button>
+        </div>
         <details class="note-sources">
           <summary>保存时的原始问答（{{ sources.length }} 条）</summary>
           <div v-for="(source, index) in sources" :key="index" class="note-source">
@@ -232,6 +238,8 @@ h1 { font-size: 26px; line-height: 1.4; margin: 20px 0; overflow-wrap: anywhere;
 .note-error { color: var(--red); }
 .note-conflict { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
 .note-conflict a { color: var(--accent); }
+.note-save-bar { position: sticky; bottom: 0; z-index: 5; display: flex; align-items: center; gap: 8px; background: var(--bg-panel); padding: 14px 0; border-top: 1px solid var(--border); margin-top: 20px; }
+.note-save-bar>span { flex: 1; color: var(--text-mut); font-size: 12px; }
 .el-pagination { margin-top: 24px; }
 @media (max-width: 600px) {
   .notes-filters { flex-wrap: wrap; }

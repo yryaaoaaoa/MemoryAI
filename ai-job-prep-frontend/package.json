@@ -8,6 +8,8 @@
     "preinstall": "npx only-allow pnpm",
     "predev": "npx kill-port@latest 5173 5174 5175",
     "dev": "vite",
+    "dev:tree": "vite --host 127.0.0.1 --port 4180 --strictPort",
+    "build:tree": "vue-tsc -b && vite build --config vite.tree.config.ts",
     "build": "vue-tsc -b && vite build",
     "test": "tsx --test tests/*.test.ts",
     "test:browser": "playwright test",

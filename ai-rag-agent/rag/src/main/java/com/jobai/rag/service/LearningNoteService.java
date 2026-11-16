@@ -34,7 +34,13 @@ public class LearningNoteService {
     private final LlmService llm;
 
     public record NoteInput(String title, String confusion, String content, String status,
-                            Long sourceSessionId, List<Long> sourceMessageIds, String requestId, Long expectedVersion) { }
+                            Long sourceSessionId, List<Long> sourceMessageIds, String requestId, Long expectedVersion,
+                            String treeJson) {
+        public NoteInput(String title, String confusion, String content, String status,
+                         Long sourceSessionId, List<Long> sourceMessageIds, String requestId, Long expectedVersion) {
+            this(title, confusion, content, status, sourceSessionId, sourceMessageIds, requestId, expectedVersion, null);
+        }
+    }
     public record DraftInput(Long sourceSessionId, List<Long> sourceMessageIds, Long noteId, Draft currentDraft,
                              String mode) {
         public DraftInput(Long sourceSessionId, List<Long> sourceMessageIds, Long noteId, Draft currentDraft) {
@@ -78,9 +84,12 @@ public class LearningNoteService {
         String requestId = UUID.fromString(input.requestId()).toString();
         String hash;
         try {
-            hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(json(Arrays.asList(
+            List<Object> identity = new ArrayList<>(Arrays.asList(
                     note.getTitle(), note.getConfusion(), note.getContent(), note.getStatus(),
-                    input.sourceSessionId(), input.sourceMessageIds())).getBytes(StandardCharsets.UTF_8)));
+                    input.sourceSessionId(), input.sourceMessageIds()));
+            // Keep retries of pre-tree creation requests compatible with their original hash.
+            if (note.getTreeJson() != null) identity.add(note.getTreeJson());
+            hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(json(identity).getBytes(StandardCharsets.UTF_8)));
         } catch (NoSuchAlgorithmException e) { throw new IllegalStateException(e); }
         LearningNote existing = notes.findByCreateRequest(userId, requestId);
         if (existing != null) return replayCreation(existing, hash);
@@ -236,12 +245,20 @@ public class LearningNoteService {
             throw new IllegalArgumentException("标题不能为空且不能超过 120 字");
         if (input.confusion() != null && input.confusion().length() > 4000)
             throw new IllegalArgumentException("困惑不能超过 4000 字");
-        if (input.content() == null || input.content().isBlank() || input.content().length() > 40000)
+        String content = input.content();
+        String treeJson = Objects.equals(content, note.getContent()) ? note.getTreeJson() : null;
+        if (input.treeJson() != null) {
+            NoteTree tree = NoteTree.parse(input.treeJson());
+            treeJson = json(tree);
+            content = tree.markdown();
+        }
+        if (content == null || content.isBlank() || content.length() > 40000)
             throw new IllegalArgumentException("笔记正文不能为空且不能超过 40000 字");
         if (input.status() == null || !STATUSES.contains(input.status())) throw new IllegalArgumentException("笔记状态无效");
         note.setTitle(input.title().trim());
         note.setConfusion(input.confusion() == null ? "" : input.confusion().trim());
-        note.setContent(input.content());
+        note.setContent(content);
+        note.setTreeJson(treeJson);
         note.setStatus(input.status());
     }
 

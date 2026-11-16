@@ -1,5 +1,6 @@
 node_modules
 dist
+dist-tree/
 *.local
 .env
 package-lock.json

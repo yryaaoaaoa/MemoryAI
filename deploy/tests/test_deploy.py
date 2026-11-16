@@ -33,6 +33,8 @@ class DeploymentTest(unittest.TestCase):
         with tarfile.open(self.archive, "w") as archive:
             archive.add(SCRIPTS / "compose.sh", arcname="compose.sh")
             archive.add(self.previous / "compose.yaml", arcname="compose.yaml")
+            archive.add(SCRIPTS.parents[1] / "ai-rag-agent/knowledge/src/main/resources/migrations/20261116_learning_note_tree.sql",
+                        arcname="migrations/20261116_learning_note_tree.sql")
         self.checksum = hashlib.sha256(self.archive.read_bytes()).hexdigest()
         bin_dir = self.root / "bin"
         bin_dir.mkdir()
@@ -48,7 +50,8 @@ new_release = directory.name != "bootstrap"
 scenario = os.environ.get("SCENARIO", "success")
 if new_release and ((scenario == "build" and "build" in args) or
                     (scenario == "health" and "up" in args) or
-                    (scenario == "proxy" and "wget" in args)):
+                    (scenario == "proxy" and "wget" in args) or
+                    (scenario == "migration" and "mysql" in args)):
     sys.exit(1)
 if "wget" in args:
     print('{"code":200,"data":{"records":[]}}')
@@ -82,6 +85,8 @@ if "wget" in args:
         calls = self.calls()
         self.assertLess(next(i for i,c in enumerate(calls) if "build" in c),
                         next(i for i,c in enumerate(calls) if "up" in c))
+        self.assertLess(next(i for i,c in enumerate(calls) if "mysql" in c),
+                        next(i for i,c in enumerate(calls) if "up" in c))
         self.assert_data_preserved()
 
     def test_failed_health_check_restores_previous_and_reports_failure(self):
@@ -110,6 +115,13 @@ if "wget" in args:
         result = self.run_deploy(checksum="0" * 64)
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.calls())
+        self.assertEqual((self.base / "current").resolve(), self.previous)
+        self.assert_data_preserved()
+
+    def test_failed_migration_does_not_replace_running_containers(self):
+        result = self.run_deploy("migration")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any("up" in c for c in self.calls()))
         self.assertEqual((self.base / "current").resolve(), self.previous)
         self.assert_data_preserved()
 

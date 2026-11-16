@@ -241,6 +241,7 @@ CREATE TABLE IF NOT EXISTS learning_note (
     title VARCHAR(120) NOT NULL,
     confusion TEXT NOT NULL,
     content MEDIUMTEXT NOT NULL,
+    tree_json JSON DEFAULT NULL COMMENT '可编辑知识树；NULL 为旧版 Markdown 笔记',
     status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
     version BIGINT NOT NULL DEFAULT 0,
     create_request_id VARCHAR(36) DEFAULT NULL,

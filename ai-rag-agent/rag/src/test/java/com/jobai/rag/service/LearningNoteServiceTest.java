@@ -398,4 +398,70 @@ class LearningNoteServiceTest {
         assertEquals("旧的理解",note.getContent()); assertEquals(sourceSnapshot,note.getSourceSnapshot());
         verifyNoInteractions(chats); verify(notes,never()).updateIfVersion(any(),anyLong());
     }
+
+    private static final String TREE = """
+            {"version":1,"nodes":[{"id":"root","title":"线程池","body":"解释 **队列**。","children":[
+              {"id":"child","title":"示例","body":"```java\\nexecute(task);\\n```","children":[]}]}]}
+            """;
+
+    @Test void treeCreationDerivesSearchableContentAndReplaysCanonicalTree() throws Exception {
+        when(chats.getMessages(10L,1L)).thenReturn(List.of(message(1,"user","为什么？")));
+        var input = new LearningNoteService.NoteInput("笔记","困惑","不可信的旧正文","REVIEW",10L,List.of(1L),
+                "10000000-0000-0000-0000-000000000001",null,TREE);
+        var created = service.create(1L,input);
+        assertEquals("## 线程池\n\n解释 **队列**。\n\n### 示例\n\n```java\nexecute(task);\n```\n",created.getContent());
+        var tree = new ObjectMapper().readTree(created.getTreeJson());
+        assertEquals("child",tree.at("/nodes/0/children/0/id").asText());
+        assertEquals("为什么？",new ObjectMapper().readTree(created.getSourceSnapshot()).get(0).get("content").asText());
+        var compact = new LearningNoteService.NoteInput(input.title(),input.confusion(),"另一份旧正文",input.status(),
+                input.sourceSessionId(),input.sourceMessageIds(),input.requestId(),null,created.getTreeJson());
+        assertSame(created,service.create(1L,compact));
+        var changedId = new LearningNoteService.NoteInput(input.title(),input.confusion(),input.content(),input.status(),
+                input.sourceSessionId(),input.sourceMessageIds(),input.requestId(),null,TREE.replace("\"child\"","\"other\""));
+        assertEquals(409,assertThrows(BusinessException.class,()->service.create(1L,changedId)).getCode());
+        verify(notes,times(1)).insertOnce(any());
+    }
+
+    @Test void treeUpdatePersistsHierarchyAndCurrentMarkdownTogetherWithoutChangingSources() {
+        LearningNote original = stored(); String sources = original.getSourceSnapshot();
+        var updated = service.update(5L,1L,new LearningNoteService.NoteInput("笔记","困惑",null,"REVIEW",null,null,null,0L,TREE));
+        assertEquals(1L,updated.getVersion()); assertEquals(sources,updated.getSourceSnapshot());
+        assertTrue(updated.getTreeJson().contains("child")); assertTrue(updated.getContent().contains("### 示例"));
+        ChatSession session = new ChatSession(); session.setId(10L); session.setUserId(1L); session.setNoteId(5L);
+        when(sessions.selectById(10L)).thenReturn(session);
+        assertTrue(service.contextForSession(10L,1L).contains("execute(task);"));
+        verify(notes).updateIfVersion(updated,0L); verifyNoInteractions(chats,llm);
+    }
+
+    @Test void legacyClientKeepsTreeForMetadataOnlyAndClearsItWhenChangingBody() {
+        LearningNote original = stored(); original.setTreeJson(TREE);
+        String body = original.getContent();
+        var updated = service.update(5L,1L,new LearningNoteService.NoteInput("改名","",body,"UNDERSTOOD",null,null,null,0L));
+        assertEquals(TREE,updated.getTreeJson());
+        updated = service.update(5L,1L,new LearningNoteService.NoteInput("改名","","新纯文本正文","UNDERSTOOD",null,null,null,1L));
+        assertNull(updated.getTreeJson()); assertEquals("新纯文本正文",updated.getContent());
+        verify(notes,times(2)).updateIfVersion(any(),anyLong());
+    }
+
+    @Test void malformedTreesAndOverlongGeneratedBodyNeverPersist() {
+        for (String tree : List.of("not JSON", "{}", "{\"version\":2,\"nodes\":[]}", "{\"version\":1,\"nodes\":[]}",
+                TREE.replace("\"child\"","\"root\""), TREE.replace("\"children\":[]","\"children\":null"),
+                TREE.replace("\"示例\"","\" \""), TREE.replace("线程池","x".repeat(121)),
+                TREE.replace("解释 **队列**。","x".repeat(40000)))) {
+            assertThrows(IllegalArgumentException.class,()->service.create(1L,
+                    new LearningNoteService.NoteInput("笔记","","ignored","REVIEW",10L,List.of(1L),
+                            "10000000-0000-0000-0000-000000000001",null,tree)));
+        }
+        verify(notes,never()).insertOnce(any()); verifyNoInteractions(chats,llm);
+    }
+
+    @Test void treeUpdatesStillRejectWrongOwnerAndStaleVersionBeforeMutation() {
+        LearningNote original = stored();
+        var input = new LearningNoteService.NoteInput("笔记","","ignored","REVIEW",null,null,null,0L,TREE);
+        assertEquals(403,assertThrows(BusinessException.class,()->service.update(5L,2L,input)).getCode());
+        original.setVersion(1L);
+        assertEquals(409,assertThrows(BusinessException.class,()->service.update(5L,1L,input)).getCode());
+        assertNull(original.getTreeJson()); assertEquals("旧的理解",original.getContent());
+        verify(notes,never()).updateIfVersion(any(),anyLong());
+    }
 }

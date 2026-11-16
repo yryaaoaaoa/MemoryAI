@@ -5,6 +5,8 @@ import { notesApi, noteStatusLabels, type LearningNote, type NoteFields, type So
 import { registerNoteLeaveGuard } from '@/utils/note-leave-guard'
 import { sourceTranscript, retainSources } from '@/utils/note-sources'
 import { renderMarkdown } from '@/utils/markdown'
+import NoteBody from './NoteBody.vue'
+import { flattenNodes, newKnowledgeNode, readTree, treeFields } from '@/utils/knowledge-tree'
 
 const props = defineProps<{ sessionId: number; messages: SourceMessage[]; selectedIds: number[]; note?: LearningNote }>()
 const emit = defineEmits<{ close: []; saved: [note: LearningNote] }>()
@@ -14,7 +16,9 @@ const initialRaw = sourceTranscript(chosen.value)
 const form = reactive<NoteFields>({
   title: props.note?.title ?? (chosen.value.find(m => m.role === 'user')?.content ?? '学习笔记').slice(0, 120),
   confusion: props.note?.confusion ?? '', content: props.note?.content ?? (initialRaw.length <= 40000 ? initialRaw : ''), status: props.note?.status ?? 'PENDING',
+  treeJson: props.note?.treeJson ?? null,
 })
+const bodyEditor = ref<InstanceType<typeof NoteBody>>()
 const initialForm = ref(JSON.stringify(form))
 const editingVersion = ref(props.note?.version)
 const savedSources = ref<SourceMessage[]>(props.note?.sources ?? [])
@@ -53,6 +57,7 @@ window.addEventListener('beforeunload', beforeUnload)
 onBeforeUnmount(() => { unregisterLeave(); window.removeEventListener('beforeunload', beforeUnload) })
 async function close() { if (await mayLeave()) emit('close') }
 function appendSource() {
+  bodyEditor.value?.finish()
   if (busy.value || !chosen.value.length) return
   const sources = sourcesForOperation()
   if (!sources) return
@@ -62,21 +67,28 @@ function appendSource() {
     error.value = '复制后正文超过 40000 字，请减少所选问答或精简当前正文。'
     return
   }
-  form.content = content
+  if (form.treeJson) {
+    const tree = readTree(form.treeJson)
+    const fields = treeFields([...tree.nodes, newKnowledgeNode('补充问答', sourceTranscript(chosen.value))])
+    if (fields.content.length > 40000 || flattenNodes(tree.nodes).length >= 1000) { error.value = '添加后超过笔记容量，请减少所选问答。'; return }
+    Object.assign(form, fields)
+  } else form.content = content
   capturedSources.value = sources
   if (!conflict.value) error.value = ''
 }
 async function replaceWithSource() {
+  bodyEditor.value?.finish()
   if (busy.value || !chosen.value.length) return
   const sources = sourcesForOperation()
   if (!sources) return
   const content = sourceTranscript(chosen.value)
   if (content.length > 40000) { error.value = '所选原文超过 40000 字，请减少所选问答。'; return }
   if (form.content && form.content !== content) {
-    try { await ElMessageBox.confirm('此操作会替换当前正文，标题和困惑保持不变。', '替换笔记正文', { confirmButtonText: '替换正文', cancelButtonText: '保留当前正文' }) }
+    try { await ElMessageBox.confirm(form.treeJson ? '此操作会将整个知识树替换为一个原文节点，标题和困惑保持不变。' : '此操作会替换当前正文，标题和困惑保持不变。', '替换笔记正文', { confirmButtonText: '替换正文', cancelButtonText: '保留当前正文' }) }
     catch { return }
   }
-  form.content = content
+  if (form.treeJson) Object.assign(form, treeFields([newKnowledgeNode('原始问答', content)]))
+  else form.content = content
   capturedSources.value = sources
   if (!conflict.value) error.value = ''
 }
@@ -87,7 +99,7 @@ async function loadLatest() {
   saving.value = true
   try {
     const latest = await notesApi.get(props.note.id)
-    Object.assign(form, { title: latest.title, confusion: latest.confusion, content: latest.content, status: latest.status })
+    Object.assign(form, { title: latest.title, confusion: latest.confusion, content: latest.content, status: latest.status, treeJson: latest.treeJson ?? null })
     savedSources.value = latest.sources
     capturedSources.value = [...latest.sources]
     editingVersion.value = latest.version
@@ -97,6 +109,7 @@ async function loadLatest() {
   finally { saving.value = false }
 }
 async function draft(mode: 'BODY' | 'MERGE') {
+  bodyEditor.value?.finish()
   if (busy.value || (mode === 'BODY' ? !form.content.trim() : !chosen.value.length)) return
   const sources = mode === 'MERGE' ? sourcesForOperation() : capturedSources.value
   if (!sources) return
@@ -105,7 +118,12 @@ async function draft(mode: 'BODY' | 'MERGE') {
     const currentDraft = { title: form.title, confusion: form.confusion, content: form.content }
     const result = await notesApi.draft(mode === 'BODY' ? { mode, noteId: props.note?.id, currentDraft }
       : { mode, noteId: props.note?.id, currentDraft, sourceSessionId: props.sessionId, sourceMessageIds: [...selected.value] })
-    Object.assign(form, result)
+    if (form.treeJson) {
+      const tree = readTree(form.treeJson)
+      const fields = treeFields([...tree.nodes, newKnowledgeNode('AI 整理结果', result.content)])
+      if (fields.content.length > 40000 || flattenNodes(tree.nodes).length >= 1000) { error.value = '整理结果与现有知识树合计超过 40000 字或 1000 个节点，原有节点已保留。请精简后重试。'; return }
+      Object.assign(form, fields)
+    } else Object.assign(form, result)
     capturedSources.value = sources
   } catch (failure: any) {
     error.value = failure?.response?.status === 400 ? failure.response.data.message : '整理失败，原有内容已保留，可以直接编辑并保存。'
@@ -113,6 +131,7 @@ async function draft(mode: 'BODY' | 'MERGE') {
   finally { drafting.value = null }
 }
 async function save() {
+  bodyEditor.value?.finish()
   if (busy.value || !valid.value) return
   const sources = sourcesForOperation()
   if (!sources) return
@@ -139,7 +158,7 @@ async function save() {
 </script>
 
 <template>
-  <el-drawer class="note-editor-drawer" :model-value="true" :title="note ? '更新学习笔记' : '存为学习笔记'" size="min(620px, 100vw)"
+  <el-drawer class="note-editor-drawer" :model-value="true" :title="note ? '更新学习笔记' : '存为学习笔记'" size="min(820px, 100vw)"
     :close-on-click-modal="false" :close-on-press-escape="!busy" :show-close="!busy" :before-close="close">
     <el-form label-position="top" @submit.prevent="save">
       <details class="source-picker" open>
@@ -158,6 +177,7 @@ async function save() {
         <el-button :disabled="busy || !selected.length" @click="replaceWithSource">将所选原文填入正文</el-button>
       </div>
       <p class="note-operation-help">整理正文只使用当前文字；结合问答会同时使用本次勾选的原文。复制会插入一份文字，重复点击会再次插入。</p>
+      <p v-if="form.treeJson" class="note-operation-help">AI 整理结果会添加为新知识点，保留已有分支，保存前可编辑或删除。</p>
       <p v-if="error" class="note-error" role="alert">{{ error }}</p>
       <a v-if="conflict" :href="note ? `/notes/${note.id}` : '/notes'" target="_blank" rel="noopener" class="note-latest">{{ note ? '在新标签页查看最新笔记' : '在新标签页查看已保存笔记' }}</a>
       <el-button v-if="conflict && note" :disabled="busy" @click="loadLatest">载入最新版本</el-button>
@@ -167,9 +187,7 @@ async function save() {
       <el-form-item label="我的困惑（选填）">
         <el-input v-model="form.confusion" type="textarea" :rows="2" maxlength="4000" :disabled="busy" placeholder="记录具体还没懂的地方" />
       </el-form-item>
-      <el-form-item label="笔记正文" required>
-        <el-input v-model="form.content" type="textarea" :rows="14" maxlength="40000" :disabled="busy" />
-      </el-form-item>
+      <NoteBody ref="bodyEditor" :content="form.content" :tree-json="form.treeJson" :title="form.title" :editing="true" :disabled="busy" @change="Object.assign(form, $event)" />
       <details v-if="capturedSources.length" class="retained-sources">
         <summary>保留的原始问答（{{ capturedSources.length }} 条）</summary>
         <p>原始问答独立于正文保存，取消勾选或修改正文不会删除它们。</p>
@@ -186,7 +204,7 @@ async function save() {
     </el-form>
     <template #footer>
       <el-button :disabled="busy" @click="close">取消</el-button>
-      <el-button type="primary" :loading="saving" :disabled="busy || !valid" @click="save">{{ note ? '保存更新' : '保存笔记' }}</el-button>
+      <el-button type="primary" :loading="saving" :disabled="busy || !valid" @mousedown.prevent @click="save">{{ note ? '保存更新' : '保存笔记' }}</el-button>
     </template>
   </el-drawer>
 </template>

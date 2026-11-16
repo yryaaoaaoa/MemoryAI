@@ -68,6 +68,6 @@ docker compose stop
 docker compose up -d --wait --wait-timeout 240
 ```
 
-`stop` 和不带 `-v` 的 `down` 保留数据卷。不要使用 `docker compose down -v`，它会删除数据库和 ES 数据。更新前备份数据与旧部署包，保留服务器 `.env`，上传新部署包后重新构建并启动。`schema.sql` 只在空数据卷首次启动时执行，后续数据库结构升级需按项目迁移文档执行，不能只替换 JAR。
+`stop` 和不带 `-v` 的 `down` 保留数据卷。不要使用 `docker compose down -v`，它会删除数据库和 ES 数据。更新前备份数据与旧部署包，保留服务器 `.env`，上传新部署包后重新构建并启动。`schema.sql` 只在空数据卷首次启动时执行。GitHub Actions 的 `deploy.sh` 会在替换应用前执行部署包中的 `20261116_learning_note_tree.sql`，为已有学习笔记表增加可空知识树列；失败时保留正在运行的应用。手工更新或更旧数据库仍需按迁移文档准备结构，不能只替换 JAR。该迁移不改写旧正文，旧应用可忽略新增列，回滚应用时不删除列或树数据。
 
 容器内存上限约为 4.1 GiB，ES JVM 堆为 512 MiB，Java 后端最大堆为 768 MiB。实际可承载的用户量和文档量需通过运行观察确定。

@@ -25,6 +25,8 @@ foreach ($configFile in $configFiles) {
 Copy-Item -LiteralPath (Join-Path $repoRoot 'ai-rag-agent/bootstrap/target/bootstrap-1.0.0.jar') -Destination (Join-Path $bundleDir 'app.jar')
 Copy-Item -LiteralPath (Join-Path $repoRoot 'ai-job-prep-frontend/dist') -Destination (Join-Path $bundleDir 'dist') -Recurse
 Copy-Item -LiteralPath (Join-Path $repoRoot 'ai-rag-agent/knowledge/src/main/resources/schema.sql') -Destination $bundleDir
+New-Item -ItemType Directory -Path (Join-Path $bundleDir 'migrations') -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $repoRoot 'ai-rag-agent/knowledge/src/main/resources/migrations/20261116_learning_note_tree.sql') -Destination (Join-Path $bundleDir 'migrations')
 # Linux entrypoint scripts must use LF even if the checkout uses CRLF.
 $initScript = Join-Path $bundleDir 'es-init.sh'
 [IO.File]::WriteAllText($initScript, [IO.File]::ReadAllText($initScript).Replace("`r`n", "`n"), [Text.UTF8Encoding]::new($false))

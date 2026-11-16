@@ -19,6 +19,11 @@ bash "$release/compose.sh" config --quiet
 # Finish building before replacing the running application.
 bash "$release/compose.sh" --progress plain build backend web
 
+# Additive schema upgrade runs before replacing the application. The previous
+# version ignores this nullable column, so application rollback remains valid.
+bash "$release/compose.sh" exec -T mysql sh -c 'MYSQL_PWD="$MYSQL_PASSWORD" mysql --default-character-set=utf8mb4 -u"$MYSQL_USER" "$MYSQL_DATABASE"' \
+  < "$release/migrations/20261116_learning_note_tree.sql"
+
 if bash "$release/compose.sh" up -d --no-deps --force-recreate --wait --wait-timeout 180 backend web &&
    bash "$release/compose.sh" exec -T --interactive=false web nginx -t &&
    bash "$release/compose.sh" exec -T --interactive=false web wget -q -O - http://127.0.0.1/api/knowledge-bases/public | grep -q '"code":200'; then

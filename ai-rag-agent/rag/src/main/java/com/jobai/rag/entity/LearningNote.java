@@ -13,6 +13,7 @@ public class LearningNote {
     private String title;
     private String confusion;
     private String content;
+    private String treeJson;
     private String status;
     private Long version;
     @com.fasterxml.jackson.annotation.JsonIgnore

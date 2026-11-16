@@ -13,16 +13,16 @@ public interface LearningNoteMapper extends BaseMapper<LearningNote> {
 
     // One autocommit statement: the owner/request unique key makes a lost-response retry safe.
     @Insert("""
-            INSERT INTO learning_note (user_id,title,confusion,content,status,version,create_request_id,
+            INSERT INTO learning_note (user_id,title,confusion,content,tree_json,status,version,create_request_id,
               create_request_hash,source_session_id,source_message_ids,source_snapshot,created_at,updated_at)
-            VALUES (#{userId},#{title},#{confusion},#{content},#{status},#{version},#{createRequestId},
+            VALUES (#{userId},#{title},#{confusion},#{content},#{treeJson},#{status},#{version},#{createRequestId},
               #{createRequestHash},#{sourceSessionId},#{sourceMessageIds},#{sourceSnapshot},#{createdAt},#{updatedAt})
             ON DUPLICATE KEY UPDATE id=id
             """)
     int insertOnce(LearningNote note);
 
     @Update("""
-            UPDATE learning_note SET title=#{note.title},confusion=#{note.confusion},content=#{note.content},
+            UPDATE learning_note SET title=#{note.title},confusion=#{note.confusion},content=#{note.content},tree_json=#{note.treeJson},
               status=#{note.status},source_message_ids=#{note.sourceMessageIds},source_snapshot=#{note.sourceSnapshot},
               updated_at=#{note.updatedAt},version=version+1
             WHERE id=#{note.id} AND user_id=#{note.userId} AND version=#{expectedVersion}

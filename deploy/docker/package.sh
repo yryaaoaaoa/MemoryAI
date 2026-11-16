@@ -11,4 +11,6 @@ done
 cp "$repo/ai-rag-agent/bootstrap/target/bootstrap-1.0.0.jar" "$bundle/app.jar"
 cp -R "$repo/ai-job-prep-frontend/dist" "$bundle/dist"
 cp "$repo/ai-rag-agent/knowledge/src/main/resources/schema.sql" "$bundle/schema.sql"
+mkdir "$bundle/migrations"
+cp "$repo/ai-rag-agent/knowledge/src/main/resources/migrations/20261116_learning_note_tree.sql" "$bundle/migrations/"
 tar -cf "$archive" -C "$bundle" .

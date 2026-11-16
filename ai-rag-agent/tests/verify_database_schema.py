@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import time
 import runpy
+import json
 import pymysql
 
 
@@ -99,6 +100,14 @@ def main():
             sql("UPDATE learning_note SET source_ranges='[]' WHERE user_id=11;", "legacy")
             sql(ranges_migration, "legacy")
             assert sql("SELECT content,source_ranges,version FROM learning_note WHERE user_id=11;", "legacy") == 'handwritten footer\t[]\t0'
+            tree_migration = (RESOURCES / "migrations/20261116_learning_note_tree.sql").read_text(encoding="utf-8")
+            sql(tree_migration, "legacy")
+            sql(tree_migration, "legacy")
+            assert sql("SELECT content,tree_json IS NULL,version FROM learning_note WHERE user_id=11;", "legacy") == 'handwritten footer\t1\t0'
+            tree = '{"version":1,"nodes":[{"id":"root","title":"知识点","body":"正文","children":[]}]}'
+            sql(f"UPDATE learning_note SET tree_json='{tree}' WHERE user_id=11;", "legacy")
+            sql(tree_migration, "legacy")
+            assert sql("SELECT JSON_UNQUOTE(JSON_EXTRACT(tree_json,'$.nodes[0].body')) FROM learning_note WHERE user_id=11;", "legacy") == '正文'
             # The newer migration preserves manual removals from the old Redis-only book.
             sql("""INSERT INTO quiz_record(user_id,question_id,user_answer,is_correct)
                    VALUES (11,501,'B',0),(11,502,'B',0);""", "legacy")
@@ -164,6 +173,26 @@ def main():
             interview_upsert = source.split('public void updateMasteryFromInterview', 1)[1].split('jdbc.update("""', 1)[1].split('"""', 1)[0]
             with pymysql.connect(host='127.0.0.1',port=port,user='root',database='fresh',autocommit=True) as connection:
                 with connection.cursor() as cursor:
+                    # Exercise the production mapper SQL against MySQL, including NULL tree clearing.
+                    mapper = (ROOT / 'rag/src/main/java/com/jobai/rag/mapper/LearningNoteMapper.java').read_text(encoding='utf-8')
+                    insert_note = mapper.split('@Insert("""',1)[1].split('"""',1)[0]
+                    update_note = mapper.split('@Update("""',1)[1].split('"""',1)[0]
+                    payload = dict(userId=42,title='tree note',confusion='',content='## Root\n\nBody\n',treeJson=tree,
+                                   status='REVIEW',version=0,createRequestId='10000000-0000-0000-0000-000000000042',
+                                   createRequestHash='a'*64,sourceSessionId=1,sourceMessageIds='[]',sourceSnapshot='[]',
+                                   createdAt='2026-11-16 00:00:00',updatedAt='2026-11-16 00:00:00')
+                    insert_sql = re.sub(r'#\{(\w+)\}',r'%(\1)s',insert_note)
+                    cursor.execute(insert_sql,payload)
+                    cursor.execute('SELECT id,tree_json,content,version FROM learning_note WHERE user_id=42')
+                    note_id, stored_tree, content, version = cursor.fetchone()
+                    assert json.loads(stored_tree) == json.loads(tree)
+                    assert content == payload['content'] and version == 0
+                    update_sql = re.sub(r'#\{(?:note\.)?(\w+)\}',r'%(\1)s',update_note)
+                    payload.update(id=note_id,expectedVersion=0,content='edited plain text',treeJson=None)
+                    assert cursor.execute(update_sql,payload) == 1
+                    assert cursor.execute(update_sql,payload) == 0
+                    cursor.execute('SELECT tree_json,content,version FROM learning_note WHERE id=%s',(note_id,))
+                    assert cursor.fetchone() == (None,'edited plain text',1)
                     for _ in range(30):
                         cursor.execute(quiz_upsert.replace('?', '%s'), (42,'sql-test',100,1,1,1))
                     cursor.execute('SELECT mastery,total_attempts,correct_attempts,streak,DATEDIFF(next_review_at,CURDATE()) FROM user_mastery WHERE user_id=42')

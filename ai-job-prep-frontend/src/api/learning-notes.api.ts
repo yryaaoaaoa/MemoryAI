@@ -3,7 +3,7 @@ import request from './request'
 export type NoteStatus = 'PENDING' | 'REVIEW' | 'UNDERSTOOD'
 export const noteStatusLabels: Record<NoteStatus, string> = { PENDING: '待弄懂', REVIEW: '待复习', UNDERSTOOD: '已理解' }
 export interface SourceMessage { id: number; sessionId?: number; role: string; content: string }
-export interface NoteFields { title: string; confusion: string; content: string; status: NoteStatus }
+export interface NoteFields { title: string; confusion: string; content: string; status: NoteStatus; treeJson?: string | null }
 export interface LearningNote extends NoteFields {
   id: number; version: number; sourceSessionId: number; sources: SourceMessage[]; createdAt: string; updatedAt: string
 }
