@@ -5,7 +5,7 @@ tag=${1:?Usage: deploy.sh release-tag archive-sha256}
 checksum=${2:?Archive SHA256 is required}
 [[ "$tag" =~ ^[a-f0-9]{40}-[0-9]+-[0-9]+$ ]] || { echo 'Invalid release tag' >&2; exit 1; }
 [[ "$checksum" =~ ^[a-f0-9]{64}$ ]] || { echo 'Invalid archive checksum' >&2; exit 1; }
-archive="$base/incoming/$tag.tar.gz"
+archive="$base/incoming/release.tar"
 printf '%s  %s\n' "$checksum" "$archive" | sha256sum --check --status
 previous=$(readlink -f "$base/current")
 test -f "$previous/compose.sh"
@@ -13,7 +13,7 @@ test -f "$base/.env"
 
 release="$base/releases/$tag"
 mkdir "$release"
-tar --no-same-owner -xzf "$archive" -C "$release"
+tar --no-same-owner -xf "$archive" -C "$release"
 printf 'RELEASE_TAG=%s\n' "$tag" > "$release/.release.env"
 bash "$release/compose.sh" config --quiet
 # Finish building before replacing the running application.

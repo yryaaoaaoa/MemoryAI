@@ -6,7 +6,9 @@
 
 推送 `master` 分支中的前后端代码或部署配置，会触发 [Deploy MemoryAI](https://github.com/yryaaoaaoa/MemoryAI/actions/workflows/deploy.yml)。也可以在该页面选择 **Run workflow** 手动发布 `master`。仅修改文档不会自动发布。
 
-工作流运行后端测试、前端测试和构建、部署脚本测试，随后通过 SSH 上传部署包。服务器先构建新镜像，再更新前后端容器并检查 Nginx 与 API。发布不重建 MySQL、Redis 或 ES，不执行数据库迁移，不清除数据卷。应用启动或代理检查失败时恢复上一版应用，工作流仍显示失败。
+工作流运行后端测试、前端测试和构建、部署脚本测试，随后通过 SSH 和 rsync 增量上传部署包，并校验完整包的 SHA256。发布包采用未压缩 tar，让 rsync 复用服务器上已有的 JAR 依赖字节，传输时再压缩变化部分。服务器需安装 rsync，并保留 `/opt/memoryai/incoming/release.tar` 作为下一次传输的比较基准。
+
+服务器先构建新镜像，再更新前后端容器并检查 Nginx 与 API。发布不重建 MySQL、Redis 或 ES，不执行数据库迁移，不清除数据卷。应用启动或代理检查失败时恢复上一版应用，工作流仍显示失败。
 
 部署使用独立账号 `memoryai-deploy`，账号具有 Docker 管理权限。仓库 Secrets 包含 `DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`、`DEPLOY_KNOWN_HOSTS`。业务 API Key 和数据库密码保留在服务器 `/opt/memoryai/.env`，不上传 GitHub。
 

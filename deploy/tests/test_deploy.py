@@ -29,8 +29,8 @@ class DeploymentTest(unittest.TestCase):
         (self.base / "current").symlink_to(self.previous)
         (self.base / ".env").write_text("DB_PASS=unchanged-secret\n")
         (self.base / "database-sentinel").write_text("existing data")
-        self.archive = self.base / "incoming" / f"{TAG}.tar.gz"
-        with tarfile.open(self.archive, "w:gz") as archive:
+        self.archive = self.base / "incoming" / "release.tar"
+        with tarfile.open(self.archive, "w") as archive:
             archive.add(SCRIPTS / "compose.sh", arcname="compose.sh")
             archive.add(self.previous / "compose.yaml", arcname="compose.yaml")
         self.checksum = hashlib.sha256(self.archive.read_bytes()).hexdigest()

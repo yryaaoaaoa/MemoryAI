@@ -63,15 +63,15 @@ jobs:
       - name: Package release
         id: release
         run: |
-          bash deploy/docker/package.sh "$RUNNER_TEMP/memoryai.tar.gz"
+          bash deploy/docker/package.sh "$RUNNER_TEMP/memoryai.tar"
           printf 'tag=%s-%s-%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
-          printf 'checksum=%s\n' "$(sha256sum "$RUNNER_TEMP/memoryai.tar.gz" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          printf 'checksum=%s\n' "$(sha256sum "$RUNNER_TEMP/memoryai.tar" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
 
       - name: Save release artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: memoryai-${{ github.sha }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/memoryai.tar.gz
+          path: ${{ runner.temp }}/memoryai.tar
           retention-days: 7
 
       - name: Deploy over SSH
@@ -90,7 +90,11 @@ jobs:
           trap 'rm -f "$HOME/.ssh/memoryai"' EXIT
           target="$DEPLOY_USER@$DEPLOY_HOST"
           options=(-i "$HOME/.ssh/memoryai" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
-          scp "${options[@]}" "$RUNNER_TEMP/memoryai.tar.gz" "$target:/opt/memoryai/incoming/$RELEASE_TAG.tar.gz"
+          # Keep the uncompressed archive as an rsync basis: unchanged nested JARs
+          # can be reused even when their offsets in the new archive have moved.
+          rsync --compress --partial --info=stats2 \
+            -e "ssh -i $HOME/.ssh/memoryai -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4" \
+            "$RUNNER_TEMP/memoryai.tar" "$target:/opt/memoryai/incoming/release.tar"
           scp "${options[@]}" deploy/docker/deploy.sh "$target:/opt/memoryai/incoming/$RELEASE_TAG.sh"
           ssh "${options[@]}" "$target" "bash '/opt/memoryai/incoming/$RELEASE_TAG.sh' '$RELEASE_TAG' '$RELEASE_CHECKSUM'"
           printf '### Published\n\nCommit: `%s`\n\n[Open MemoryAI](http://%s/)\n' "$GITHUB_SHA" "$DEPLOY_HOST" >> "$GITHUB_STEP_SUMMARY"
