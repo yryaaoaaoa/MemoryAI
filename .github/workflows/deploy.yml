@@ -57,6 +57,12 @@ jobs:
           pnpm test
           pnpm build
 
+      - name: Verify note saving on HTTP
+        working-directory: ai-job-prep-frontend
+        run: |
+          pnpm exec playwright install --with-deps chromium
+          pnpm exec playwright test tests/browser/http-note-save.spec.ts --workers=1
+
       - name: Test deployment rollback
         run: python3 -m unittest discover -s deploy/tests -v
 

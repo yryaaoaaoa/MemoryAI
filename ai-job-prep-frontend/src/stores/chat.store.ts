@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
+import { createUuid } from '@/utils/uuid'
 import type { ChatSession, ChatMessage, ToolCall } from '@/types'
 
 export const useChatStore = defineStore('chat', () => {
@@ -21,7 +22,7 @@ export const useChatStore = defineStore('chat', () => {
   function finalizeStreaming() {
     if (streamingContent.value) {
       messages.value.push({
-        id: crypto.randomUUID(),
+        id: createUuid(),
         role: 'assistant',
         content: streamingContent.value,
         createdAt: new Date().toISOString(),

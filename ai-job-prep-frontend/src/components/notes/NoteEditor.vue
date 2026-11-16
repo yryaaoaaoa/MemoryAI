@@ -5,6 +5,7 @@ import { notesApi, noteStatusLabels, type LearningNote, type NoteFields, type So
 import { registerNoteLeaveGuard } from '@/utils/note-leave-guard'
 import { sourceTranscript, retainSources } from '@/utils/note-sources'
 import { renderMarkdown } from '@/utils/markdown'
+import { createUuid } from '@/utils/uuid'
 import NoteBody from './NoteBody.vue'
 import { flattenNodes, newKnowledgeNode, readTree, treeFields } from '@/utils/knowledge-tree'
 
@@ -24,7 +25,7 @@ const editingVersion = ref(props.note?.version)
 const savedSources = ref<SourceMessage[]>(props.note?.sources ?? [])
 const capturedSources = ref<SourceMessage[]>(props.note?.sources ?? (form.content ? [...chosen.value] : []))
 const initialCaptured = ref(JSON.stringify(capturedSources.value.map(message => message.id)))
-const requestId = crypto.randomUUID()
+const requestId = createUuid()
 const drafting = ref<'BODY' | 'MERGE' | null>(null)
 const saving = ref(false)
 const error = ref(!props.note && initialRaw.length > 40000 ? '所选原文超过正文上限，请减少选择后插入，或填写自己的笔记。' : '')

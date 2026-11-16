@@ -1,3 +1,5 @@
+import { createUuid } from './uuid'
+
 export interface KnowledgeNode {
   id: string
   title: string
@@ -30,7 +32,7 @@ export function treeFields(nodes: KnowledgeNode[]) {
 }
 
 export function newKnowledgeNode(title: string, body = ''): KnowledgeNode {
-  return { id: crypto.randomUUID(), title, body, children: [] }
+  return { id: createUuid(), title, body, children: [] }
 }
 
 export interface TreeNote {

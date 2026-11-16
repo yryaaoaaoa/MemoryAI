@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ArrowRight, Plus, MoreFilled, RefreshLeft, RefreshRight, Search, Document, Download, Close, Check, Moon, Sunny, Connection, EditPen } from '@element-plus/icons-vue'
 import { renderMarkdown } from '@/utils/markdown'
+import { createUuid } from '@/utils/uuid'
 import { exampleNote, flattenNodes, locateNode, moveNode, parseTreeNote, toMarkdown, type TreeNote } from './tree-note'
 
 const storageKey = 'memorai-tree-note-prototype-v1'
@@ -125,7 +126,7 @@ async function addNode(kind: 'root' | 'child' | 'sibling', id?: string) {
   const found = id ? locateNode(note.value.nodes, id) : undefined
   if (kind !== 'root' && !found) return
   remember()
-  const node = { id: crypto.randomUUID(), title: '新知识点', body: '', children: [] }
+  const node = { id: createUuid(), title: '新知识点', body: '', children: [] }
   if (kind === 'root') note.value.nodes.push(node)
   else if (kind === 'child') { found!.node.children.push(node); collapsed.value.delete(id!) }
   else found!.siblings.splice(found!.index + 1, 0, node)
