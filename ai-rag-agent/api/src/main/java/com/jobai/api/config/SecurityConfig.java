@@ -10,6 +10,8 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
+import org.springframework.session.web.http.CookieSerializer;
 
 @Configuration
 @EnableWebSecurity
@@ -21,7 +23,9 @@ public class SecurityConfig {
     }
 
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain securityFilterChain(HttpSecurity http,
+                                                   AdminAuthorizationManager adminAuthorization,
+                                                   CookieSerializer cookieSerializer) throws Exception {
         http
             .csrf(csrf -> csrf.disable())
             .sessionManagement(sm -> sm
@@ -33,7 +37,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/auth/login", "/api/auth/register").permitAll()
                 .requestMatchers("/api/knowledge-bases/public").permitAll()
-                .requestMatchers("/api/test/**").permitAll()
+                .requestMatchers("/api/admin/**", "/api/settings/**", "/api/test/**").access(adminAuthorization)
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
                 .anyRequest().authenticated()
             )
@@ -41,6 +45,9 @@ public class SecurityConfig {
                 .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
             )
             .logout(logout -> logout.disable());
+
+        // Register only in the security chain, after the session authentication is resolved.
+        http.addFilterAfter(new SessionCookieRenewalFilter(cookieSerializer), AuthorizationFilter.class);
 
         return http.build();
     }

@@ -15,6 +15,10 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessage> {
     @Select("SELECT MAX(message_order) FROM chat_message WHERE session_id = #{sessionId}")
     Integer selectMaxOrder(@Param("sessionId") Long sessionId);
 
+    // An unfinished user turn still owns the immediately following assistant slot.
+    @Select("SELECT MAX(message_order + CASE WHEN role = 'user' THEN 1 ELSE 0 END) FROM chat_message WHERE session_id = #{sessionId}")
+    Integer selectMaxReservedOrder(@Param("sessionId") Long sessionId);
+
     @Select("SELECT COUNT(*) FROM chat_message WHERE session_id = #{sessionId} AND role = 'user'")
     int countUserMessages(@Param("sessionId") Long sessionId);
 

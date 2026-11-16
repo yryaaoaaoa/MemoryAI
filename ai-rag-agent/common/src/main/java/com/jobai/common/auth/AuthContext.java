@@ -1,5 +1,8 @@
 package com.jobai.common.auth;
 
+import com.jobai.common.BusinessException;
+import com.jobai.common.ErrorCode;
+
 /**
  * ThreadLocal holder for the currently authenticated user.
  * Set by AuthInterceptor at request start, read by agent tools and services.
@@ -19,6 +22,12 @@ public final class AuthContext {
     public static String getRole() { return CURRENT_ROLE.get(); }
 
     public static boolean isAdmin() { return "admin".equals(CURRENT_ROLE.get()); }
+
+    public static void requireAdmin() {
+        if (get() == null || !isAdmin()) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "仅管理员可执行此操作");
+        }
+    }
 
     public static void clear() {
         CURRENT_USER.remove();

@@ -1,0 +1,14 @@
+{
+  "settings": {"number_of_shards": 1, "number_of_replicas": 0},
+  "mappings": {
+    "properties": {
+      "embedding": {"type": "dense_vector", "dims": 1024, "index": true, "similarity": "cosine"},
+      "content": {"type": "text", "analyzer": "standard"},
+      "heading_path": {"type": "text", "analyzer": "standard"},
+      "kb_id": {"type": "keyword"},
+      "doc_id": {"type": "keyword"},
+      "user_id": {"type": "keyword"},
+      "chunk_id": {"type": "keyword"}
+    }
+  }
+}

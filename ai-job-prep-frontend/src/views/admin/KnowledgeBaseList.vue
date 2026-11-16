@@ -15,6 +15,29 @@ const formRef = ref<FormInstance>()
 const form = ref({ name: '', description: '' })
 const editingId = ref<string | null>(null)
 const submitting = ref(false)
+const page = ref(1)
+const size = ref(10)
+
+async function loadList() {
+  try {
+    const accepted = await store.fetchKBList(page.value, size.value)
+    if (accepted && page.value > 1 && !store.kbList.length && store.kbTotal > 0) {
+      page.value = Math.ceil(store.kbTotal / size.value)
+      await store.fetchKBList(page.value, size.value)
+    }
+  } catch { /* request interceptor reports the error; old rows were cleared */ }
+}
+
+function changePage(value: number) {
+  page.value = value
+  void loadList()
+}
+
+function changeSize(value: number) {
+  size.value = value
+  page.value = 1
+  void loadList()
+}
 
 const rules: FormRules = {
   name: [{ required: true, message: '请输入知识库名称', trigger: 'blur' }],
@@ -46,7 +69,8 @@ async function handleSubmit() {
       await store.createKB(form.value)
     }
     dialogVisible.value = false
-    await store.fetchKBList()
+    if (!editingId.value) page.value = 1
+    await loadList()
   } finally {
     submitting.value = false
   }
@@ -60,7 +84,8 @@ async function handleDelete(kb: KnowledgeBase) {
       { confirmButtonText: '确认删除', cancelButtonText: '取消', type: 'warning' },
     )
     await store.deleteKB(kb.id)
-    await store.fetchKBList()
+    if (store.kbList.length === 1 && page.value > 1) page.value--
+    await loadList()
   } catch {
     // cancelled
   }
@@ -70,9 +95,7 @@ function goDetail(id: string) {
   router.push(`/admin/knowledge-bases/${id}`)
 }
 
-onMounted(() => {
-  store.fetchKBList()
-})
+onMounted(loadList)
 </script>
 
 <template>
@@ -85,7 +108,7 @@ onMounted(() => {
       </el-button>
     </div>
 
-    <el-table :data="store.kbList" v-loading="store.loading" stripe style="width: 100%">
+    <el-table :data="store.kbList" v-loading="store.kbListLoading" stripe style="width: 100%">
       <el-table-column prop="name" label="名称" min-width="160" />
       <el-table-column prop="description" label="描述" min-width="200" />
       <el-table-column prop="documentCount" label="文档数" width="80" />
@@ -99,6 +122,11 @@ onMounted(() => {
         </template>
       </el-table-column>
     </el-table>
+
+    <el-pagination v-if="store.kbTotal > 0" class="pagination"
+      :current-page="page" :page-size="size" :total="store.kbTotal"
+      :page-sizes="[10, 20, 50]" :disabled="store.kbListLoading"
+      layout="total, sizes, prev, pager, next" @current-change="changePage" @size-change="changeSize" />
 
     <el-dialog v-model="dialogVisible" :title="dialogTitle" width="480px" destroy-on-close>
       <el-form ref="formRef" :model="form" :rules="rules" label-width="80px">
@@ -125,6 +153,7 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.pagination { margin-top: 20px; justify-content: flex-end; }
 .admin {
   max-width: 1000px;
   margin: 0 auto;

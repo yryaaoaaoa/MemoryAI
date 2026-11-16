@@ -1,0 +1,4 @@
+.env
+.bundle/
+*.tar.gz
+verification-*.json

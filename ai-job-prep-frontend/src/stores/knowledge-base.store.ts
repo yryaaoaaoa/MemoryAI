@@ -9,26 +9,72 @@ export const useKnowledgeBaseStore = defineStore('knowledgeBase', () => {
   const kbList = ref<KnowledgeBase[]>([])
   const currentKB = ref<KnowledgeBase | null>(null)
   const documents = ref<Document[]>([])
-  const loading = ref(false)
-  const total = ref(0)
+  const kbListLoading = ref(false)
+  const kbLoading = ref(false)
+  const documentsLoading = ref(false)
+  const kbTotal = ref(0)
+  const documentsTotal = ref(0)
+  const activeKbId = ref<string | null>(null)
+  let listVersion = 0
+  let kbVersion = 0
+  let documentsVersion = 0
+
+  function clearDetail() {
+    kbVersion++
+    documentsVersion++
+    activeKbId.value = null
+    currentKB.value = null
+    documents.value = []
+    documentsTotal.value = 0
+    kbLoading.value = false
+    documentsLoading.value = false
+  }
+
+  function selectKB(id: string) {
+    if (activeKbId.value === String(id)) return
+    clearDetail()
+    activeKbId.value = String(id)
+  }
+
+  function reset() {
+    listVersion++
+    kbList.value = []
+    kbTotal.value = 0
+    kbListLoading.value = false
+    clearDetail()
+  }
 
   async function fetchKBList(page = 1, size = 10) {
-    loading.value = true
+    const version = ++listVersion
+    kbListLoading.value = true
+    kbList.value = []
     try {
       const res = await knowledgeBaseApi.list({ page, size })
+      if (version !== listVersion) return false
       kbList.value = res.records
-      total.value = res.total
+      kbTotal.value = res.total
+      return true
+    } catch (error) {
+      if (version === listVersion) kbTotal.value = 0
+      throw error
     } finally {
-      loading.value = false
+      if (version === listVersion) kbListLoading.value = false
     }
   }
 
   async function fetchKBById(id: string) {
-    loading.value = true
+    selectKB(id)
+    const version = ++kbVersion
+    kbLoading.value = true
     try {
-      currentKB.value = await knowledgeBaseApi.getById(id)
+      const kb = await knowledgeBaseApi.getById(id)
+      if (version !== kbVersion || activeKbId.value !== String(id)) return
+      currentKB.value = kb
+    } catch (error) {
+      if (version === kbVersion) currentKB.value = null
+      throw error
     } finally {
-      loading.value = false
+      if (version === kbVersion) kbLoading.value = false
     }
   }
 
@@ -50,13 +96,21 @@ export const useKnowledgeBaseStore = defineStore('knowledgeBase', () => {
   }
 
   async function fetchDocuments(kbId: string, page = 1, size = 10) {
-    loading.value = true
+    selectKB(kbId)
+    const version = ++documentsVersion
+    documentsLoading.value = true
+    documents.value = []
     try {
       const res = await documentApi.listByKB(kbId, { page, size })
+      if (version !== documentsVersion || activeKbId.value !== String(kbId)) return false
       documents.value = res.records
-      total.value = res.total
+      documentsTotal.value = res.total
+      return true
+    } catch (error) {
+      if (version === documentsVersion) documentsTotal.value = 0
+      throw error
     } finally {
-      loading.value = false
+      if (version === documentsVersion) documentsLoading.value = false
     }
   }
 
@@ -68,9 +122,12 @@ export const useKnowledgeBaseStore = defineStore('knowledgeBase', () => {
    */
   async function pollDocumentStatus(ids: string[]): Promise<boolean> {
     if (ids.length === 0) return false
+    const version = documentsVersion
+    const kbId = activeKbId.value
     const results = await Promise.allSettled(
       ids.map((id) => documentApi.getStatus(id)),
     )
+    if (version !== documentsVersion || kbId !== activeKbId.value) return false
     let changed = false
     for (const r of results) {
       if (r.status !== 'fulfilled') continue
@@ -92,8 +149,14 @@ export const useKnowledgeBaseStore = defineStore('knowledgeBase', () => {
     kbList,
     currentKB,
     documents,
-    loading,
-    total,
+    kbListLoading,
+    kbLoading,
+    documentsLoading,
+    kbTotal,
+    documentsTotal,
+    activeKbId,
+    clearDetail,
+    reset,
     fetchKBList,
     fetchKBById,
     createKB,

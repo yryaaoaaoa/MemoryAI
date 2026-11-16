@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api/knowledge-bases")
 @RequiredArgsConstructor
+@com.jobai.common.ConditionalOnRagEnabled
 public class KnowledgeBaseController {
 
     private final KnowledgeBaseService knowledgeBaseService;

@@ -158,15 +158,6 @@ public class InterviewQuestionService {
             "senior", "3年+经验。考察架构设计和深度调优。"
     );
 
-    private static final String[][] FALLBACK_QUESTIONS = {
-            {"请描述一个你主导解决的技术难题，你的分析思路是什么？", "GENERAL", "综合能力"},
-            {"你在做技术方案选型时，通常考虑哪些因素？请举例说明。", "GENERAL", "综合能力"},
-            {"请分享一次你处理线上故障的经历，从发现到修复的完整过程。", "GENERAL", "综合能力"},
-            {"你如何保证代码质量？介绍你实践过的有效手段。", "GENERAL", "综合能力"},
-            {"描述一个你做过的技术优化案例，优化的动机、方案和效果。", "GENERAL", "综合能力"},
-            {"你在团队协作中遇到过最大的分歧是什么？如何解决的？", "GENERAL", "综合能力"},
-    };
-
     private final InterviewSkillService skillService;
     private final LangChain4jConfig langChain4jConfig;
     private final ObjectMapper objectMapper;
@@ -228,7 +219,11 @@ public class InterviewQuestionService {
             List<HistoricalQuestion> history,
             String jdText) {
 
-        SkillDTO skill = resolveSkill(skillId, jdText);
+        return generateQuestions(resolveSkill(skillId, jdText), difficulty, resumeText, resumeId, questionCount, history);
+    }
+
+    public List<InterviewQuestionDTO> generateQuestions(SkillDTO skill, String difficulty,
+            String resumeText, Long resumeId, int questionCount, List<HistoricalQuestion> history) {
         String difficultyDesc = DIFFICULTY_MAP.getOrDefault(
                 difficulty != null ? difficulty : "mid", DIFFICULTY_MAP.get("mid"));
         ChatModel chatModel = langChain4jConfig.createChatModel(0.5);
@@ -239,16 +234,17 @@ public class InterviewQuestionService {
 
         boolean hasResume = (resumeText != null && !resumeText.isBlank())
                 || (structuredResume != null && !structuredResume.isBlank());
+        Long currentUserId = AuthContext.get();
 
         if (!hasResume) {
-            return generateDirectionOnly(chatModel, skill, difficultyDesc, questionCount, historicalSection);
+            return generateDirectionOnly(chatModel, skill, difficultyDesc, questionCount, historicalSection, currentUserId);
         }
 
         int resumeCount = Math.max(1, (int) Math.round(questionCount * RESUME_RATIO));
         int directionCount = questionCount - resumeCount;
 
         log.info("Parallel generation: skill={}, total={}, resume={}, direction={}, structured={}",
-                skillId, questionCount, resumeCount, directionCount, structuredResume != null);
+                skill.id(), questionCount, resumeCount, directionCount, structuredResume != null);
 
         CompletableFuture<List<InterviewQuestionDTO>> resumeFuture = CompletableFuture.supplyAsync(
                 () -> generateResumeQuestions(chatModel, resumeText, structuredResume, resumeCount,
@@ -257,31 +253,19 @@ public class InterviewQuestionService {
 
         CompletableFuture<List<InterviewQuestionDTO>> directionFuture = CompletableFuture.supplyAsync(
                 () -> generateDirectionOnly(chatModel, skill, difficultyDesc, directionCount,
-                        historicalSection),
+                        historicalSection, currentUserId),
                 executor);
 
         List<InterviewQuestionDTO> resumeQuestions;
         List<InterviewQuestionDTO> directionQuestions;
         try {
             resumeQuestions = resumeFuture.join();
-        } catch (CompletionException e) {
-            log.error("Resume questions failed, falling back to all direction", e.getCause());
-            directionFuture.cancel(true);
-            return generateDirectionOnly(chatModel, skill, difficultyDesc, questionCount, historicalSection);
-        }
-
-        try {
             directionQuestions = directionFuture.join();
         } catch (CompletionException e) {
-            log.error("Direction questions failed, using only resume questions", e.getCause());
-            return resumeQuestions.isEmpty()
-                    ? generateFallbackQuestions(skill, questionCount)
-                    : resumeQuestions;
-        }
-
-        if (resumeQuestions.isEmpty() && directionQuestions.isEmpty()) {
-            log.warn("Both batches empty, falling back to default");
-            return generateFallbackQuestions(skill, questionCount);
+            resumeFuture.cancel(true);
+            directionFuture.cancel(true);
+            log.error("Interview question generation failed", e.getCause());
+            throw new BusinessException(ErrorCode.LLM_SERVICE_FAILED, "面试出题失败，请稍后重试");
         }
 
         return mergeBatches(resumeQuestions, directionQuestions);
@@ -291,9 +275,8 @@ public class InterviewQuestionService {
 
     private List<InterviewQuestionDTO> generateDirectionOnly(
             ChatModel chatModel, SkillDTO skill, String difficultyDesc,
-            int questionCount, String historicalSection) {
-
-        Long currentUserId = AuthContext.get();
+            int questionCount, String historicalSection, Long currentUserId) {
+        if (questionCount == 0) return List.of();
         Map<String, Integer> allocation = skillService.calculateAllocation(skill.id(), skill.categories(), questionCount, currentUserId);
         String allocationTable = skillService.buildAllocationTable(allocation, skill.categories());
 
@@ -319,13 +302,14 @@ public class InterviewQuestionService {
             return parseAndConvert(raw, questionCount);
         } catch (Exception e) {
             log.error("Direction generation failed: {}", e.getMessage(), e);
-            return generateFallbackQuestions(skill, questionCount);
+            throw new BusinessException(ErrorCode.LLM_SERVICE_FAILED, "面试出题失败，请稍后重试");
         }
     }
 
     private List<InterviewQuestionDTO> generateResumeQuestions(
             ChatModel chatModel, String resumeText, String structuredResume, int questionCount,
             SkillDTO skill, String difficultyDesc, String historicalSection) {
+        if (questionCount == 0) return List.of();
         try {
             String skillDesc = buildSkillDescription(skill);
             String systemPrompt = RESUME_SYSTEM_PROMPT
@@ -380,6 +364,7 @@ public class InterviewQuestionService {
             @SuppressWarnings("unchecked")
             List<String> followUps = item.get("followUps") instanceof List<?> fu
                     ? fu.stream().filter(o -> o instanceof String).map(o -> (String) o)
+                    .map(String::strip).filter(text -> !text.isBlank())
                     .limit(MAX_FOLLOW_UP_COUNT).toList()
                     : List.of();
 
@@ -403,7 +388,7 @@ public class InterviewQuestionService {
         long currentMain = questions.stream().filter(q -> !q.isFollowUp()).count();
         if (currentMain <= maxMain) {
             if (currentMain < maxMain) {
-                log.warn("AI generated fewer questions: expected={}, actual={}", maxMain, currentMain);
+                throw new BusinessException(ErrorCode.LLM_SERVICE_FAILED, "AI 生成的题目数量不足，请重试");
             }
             return questions;
         }
@@ -436,46 +421,6 @@ public class InterviewQuestionService {
                     q.topicSummary(), q.isFollowUp(), newParent));
         }
         return merged;
-    }
-
-    // ==================== Fallback ====================
-
-    private List<InterviewQuestionDTO> generateFallbackQuestions(SkillDTO skill, int count) {
-        List<SkillCategoryDTO> categories = skill != null ? skill.categories() : List.of();
-        List<InterviewQuestionDTO> questions = new ArrayList<>();
-        int index = 0;
-
-        if (!categories.isEmpty()) {
-            int generated = 0;
-            while (generated < count) {
-                SkillCategoryDTO cat = categories.get(generated % categories.size());
-                String qText = "请谈谈你在" + cat.label() + "方向的技术理解和实践经验。";
-                questions.add(InterviewQuestionDTO.create(index++, qText, cat.key(), cat.label()));
-                int mainIdx = index - 1;
-                for (int j = 0; j < 2; j++) {
-                    questions.add(InterviewQuestionDTO.create(index++,
-                            buildDefaultFollowUp(qText, j + 1), cat.key(),
-                            buildFollowUpCategory(cat.label(), j + 1),
-                            null, true, mainIdx));
-                }
-                generated++;
-            }
-            log.info("Generated category-based fallback: {} questions", questions.size());
-            return questions;
-        }
-
-        for (int i = 0; i < Math.min(count, FALLBACK_QUESTIONS.length); i++) {
-            String[] q = FALLBACK_QUESTIONS[i];
-            questions.add(InterviewQuestionDTO.create(index++, q[0], q[1], q[2]));
-            int mainIdx = index - 1;
-            for (int j = 0; j < 2; j++) {
-                questions.add(InterviewQuestionDTO.create(index++,
-                        buildDefaultFollowUp(q[0], j + 1), q[1],
-                        buildFollowUpCategory(q[2], j + 1), null, true, mainIdx));
-            }
-        }
-        log.info("Generated generic fallback: {} questions", questions.size());
-        return questions;
     }
 
     // ==================== Prompt Helpers ====================
@@ -525,12 +470,6 @@ public class InterviewQuestionService {
     private String buildFollowUpCategory(String category, int order) {
         String base = (category == null || category.isBlank()) ? "追问" : category;
         return base + "（追问" + order + "）";
-    }
-
-    private String buildDefaultFollowUp(String mainQ, int order) {
-        return order == 1
-                ? "基于\"" + mainQ + "\"，请结合你亲自做过的一个真实场景展开说明。"
-                : "基于\"" + mainQ + "\"，如果线上出现异常，你会如何定位并给出修复方案？";
     }
 
     // ==================== Utilities ====================

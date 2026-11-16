@@ -36,7 +36,7 @@ public class AuthController {
     @PostMapping("/register")
     public R<UserVO> register(@Valid @RequestBody RegisterRequest req) {
         User user = authService.register(req.getUsername(), req.getPassword());
-        return R.ok(new UserVO(user.getId(), user.getUsername()));
+        return R.ok(new UserVO(user.getId(), user.getUsername(), user.getRole()));
     }
 
     @Operation(summary = "登录")
@@ -52,10 +52,11 @@ public class AuthController {
         context.setAuthentication(token);
 
         HttpSession session = request.getSession(true);
+        request.changeSessionId();
         session.setAttribute(
                 HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY, context);
 
-        return R.ok(new UserVO(user.getId(), user.getUsername()));
+        return R.ok(new UserVO(user.getId(), user.getUsername(), user.getRole()));
     }
 
     @Operation(summary = "登出")
@@ -81,6 +82,6 @@ public class AuthController {
         Long userId = Long.valueOf(auth.getName());
         User user = userMapper.selectById(userId);
         String username = user != null ? user.getUsername() : auth.getName();
-        return R.ok(new UserVO(userId, username));
+        return R.ok(new UserVO(userId, username, user != null ? user.getRole() : "user"));
     }
 }

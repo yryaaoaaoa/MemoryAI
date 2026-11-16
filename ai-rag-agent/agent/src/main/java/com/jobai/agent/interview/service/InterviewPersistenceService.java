@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jobai.agent.interview.model.*;
 import com.jobai.agent.interview.mapper.InterviewAnswerMapper;
 import com.jobai.agent.interview.mapper.InterviewSessionMapper;
+import com.jobai.agent.interview.skill.InterviewSkillService.SkillDTO;
 import com.jobai.common.BusinessException;
 import com.jobai.common.ErrorCode;
 import com.jobai.common.auth.AuthContext;
@@ -39,7 +40,16 @@ public class InterviewPersistenceService {
     public void saveSession(String sessionId, Long resumeId, int totalQuestions,
                             List<InterviewQuestionDTO> questions,
                             String llmProvider, String skillId, String difficulty,
-                            String mode) {
+                            String mode, String resumeText, String allocationsJson) {
+        saveSession(sessionId, resumeId, totalQuestions, questions, llmProvider, skillId, difficulty,
+                mode, resumeText, allocationsJson, null);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public void saveSession(String sessionId, Long resumeId, int totalQuestions,
+                            List<InterviewQuestionDTO> questions,
+                            String llmProvider, String skillId, String difficulty,
+                            String mode, String resumeText, String allocationsJson, SkillDTO skill) {
         try {
             InterviewSessionEntity entity = new InterviewSessionEntity();
             entity.setSessionId(sessionId);
@@ -52,6 +62,9 @@ public class InterviewPersistenceService {
             entity.setSkillId(skillId != null ? skillId : "java-backend");
             entity.setDifficulty(difficulty != null ? difficulty : "mid");
             entity.setMode(mode != null ? mode : "batch");
+            entity.setResumeText(resumeText != null ? resumeText : "");
+            entity.setSkillSnapshotJson(skill != null ? objectMapper.writeValueAsString(skill) : null);
+            entity.setAllocationsJson(allocationsJson);
 
             // 设置用户ID
             Long userId = AuthContext.get();
@@ -69,7 +82,9 @@ public class InterviewPersistenceService {
 
     @Transactional(rollbackFor = Exception.class)
     public void updateSessionStatus(String sessionId, String status) {
-        findBySessionId(sessionId).ifPresent(entity -> {
+        sessionMapper.findBySessionIdForUpdate(sessionId).ifPresent(entity -> {
+            if (InterviewSessionEntity.Status.COMPLETED.name().equals(status)
+                    || InterviewSessionEntity.Status.IN_PROGRESS.name().equals(status)) requireActive(entity);
             entity.setStatus(status);
             if (InterviewSessionEntity.Status.COMPLETED.name().equals(status)
                     || InterviewSessionEntity.Status.EVALUATED.name().equals(status)) {
@@ -80,8 +95,49 @@ public class InterviewPersistenceService {
     }
 
     @Transactional(rollbackFor = Exception.class)
+    public void completeSession(String sessionId, List<InterviewQuestionDTO> questions, Integer index) {
+        InterviewSessionEntity entity = sessionMapper.findBySessionIdForUpdate(sessionId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "面试会话不存在"));
+        requireActive(entity);
+        if (questions != null) {
+            try {
+                entity.setQuestionsJson(objectMapper.writeValueAsString(questions));
+            } catch (JsonProcessingException e) {
+                throw new BusinessException(ErrorCode.INTERNAL_ERROR, "序列化题目列表失败");
+            }
+        }
+        if (index != null) entity.setCurrentQuestionIndex(index);
+        entity.setStatus(InterviewSessionEntity.Status.COMPLETED.name());
+        entity.setEvaluateStatus(InterviewSessionEntity.EvaluateStatus.PENDING.name());
+        entity.setCompletedAt(LocalDateTime.now());
+        sessionMapper.updateById(entity);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public void saveProgress(String sessionId, List<InterviewQuestionDTO> questions, int index) {
+        InterviewSessionEntity entity = sessionMapper.findBySessionIdForUpdate(sessionId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "面试会话不存在"));
+        requireActive(entity);
+        try {
+            entity.setQuestionsJson(objectMapper.writeValueAsString(questions));
+            entity.setCurrentQuestionIndex(index);
+            entity.setStatus(InterviewSessionEntity.Status.IN_PROGRESS.name());
+            sessionMapper.updateById(entity);
+        } catch (JsonProcessingException e) {
+            throw new BusinessException(ErrorCode.INTERNAL_ERROR, "序列化题目列表失败");
+        }
+    }
+
+    private void requireActive(InterviewSessionEntity entity) {
+        if (!"CREATED".equals(entity.getStatus()) && !"IN_PROGRESS".equals(entity.getStatus())) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "面试已结束，不能修改答案");
+        }
+    }
+
+    @Transactional(rollbackFor = Exception.class)
     public void updateQuestionsJson(String sessionId, List<InterviewQuestionDTO> questions) {
-        findBySessionId(sessionId).ifPresent(entity -> {
+        sessionMapper.findBySessionIdForUpdate(sessionId).ifPresent(entity -> {
+            requireActive(entity);
             try {
                 entity.setQuestionsJson(objectMapper.writeValueAsString(questions));
                 sessionMapper.updateById(entity);
@@ -93,7 +149,8 @@ public class InterviewPersistenceService {
 
     @Transactional(rollbackFor = Exception.class)
     public void updateCurrentQuestionIndex(String sessionId, int index) {
-        findBySessionId(sessionId).ifPresent(entity -> {
+        sessionMapper.findBySessionIdForUpdate(sessionId).ifPresent(entity -> {
+            requireActive(entity);
             entity.setCurrentQuestionIndex(index);
             sessionMapper.updateById(entity);
         });
@@ -101,7 +158,8 @@ public class InterviewPersistenceService {
 
     @Transactional(rollbackFor = Exception.class)
     public void updateContextSummary(String sessionId, String contextSummary) {
-        findBySessionId(sessionId).ifPresent(entity -> {
+        sessionMapper.findBySessionIdForUpdate(sessionId).ifPresent(entity -> {
+            requireActive(entity);
             entity.setContextSummary(contextSummary);
             sessionMapper.updateById(entity);
         });
@@ -109,7 +167,7 @@ public class InterviewPersistenceService {
 
     @Transactional(rollbackFor = Exception.class)
     public void updateEvaluateStatus(String sessionId, String status, String error) {
-        findBySessionId(sessionId).ifPresent(entity -> {
+        sessionMapper.findBySessionIdForUpdate(sessionId).ifPresent(entity -> {
             entity.setEvaluateStatus(status);
             entity.setEvaluateError(error);
             sessionMapper.updateById(entity);
@@ -118,9 +176,44 @@ public class InterviewPersistenceService {
 
     // =================== Answer CRUD ===================
 
+    public void recoverInterruptedEvaluations() {
+        int count = sessionMapper.failInterruptedEvaluations();
+        if (count > 0) log.warn("Marked {} interrupted interview evaluations as retryable", count);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public boolean startEvaluation(String sessionId, Long userId) {
+        InterviewSessionEntity entity = sessionMapper.findBySessionIdForUpdate(sessionId)
+                .filter(s -> userId != null && userId.equals(s.getUserId()))
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "面试会话不存在"));
+        if (!"COMPLETED".equals(entity.getStatus()) || !"PENDING".equals(entity.getEvaluateStatus())) return false;
+        entity.setEvaluateStatus("PROCESSING");
+        entity.setEvaluateError("");
+        sessionMapper.updateById(entity);
+        return true;
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public void requestEvaluationRetry(String sessionId, Long userId) {
+        InterviewSessionEntity entity = sessionMapper.findBySessionIdForUpdate(sessionId)
+                .filter(s -> userId != null && userId.equals(s.getUserId()))
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "面试会话不存在"));
+        if ("PENDING".equals(entity.getEvaluateStatus()) || "PROCESSING".equals(entity.getEvaluateStatus())) {
+            throw new BusinessException(409, "评估正在进行，请等待结果");
+        }
+        if (!"COMPLETED".equals(entity.getStatus()) || !"FAILED".equals(entity.getEvaluateStatus())) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "当前面试无需重新评估");
+        }
+        entity.setEvaluateStatus("PENDING");
+        entity.setEvaluateError("");
+        sessionMapper.updateById(entity);
+    }
+
     @Transactional(rollbackFor = Exception.class)
     public void saveAnswer(String sessionId, int questionIndex, String question, String category,
                            String userAnswer, int score, String feedback) {
+        requireActive(sessionMapper.findBySessionIdForUpdate(sessionId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "面试会话不存在")));
         InterviewAnswerEntity answer = answerMapper
                 .findBySessionIdAndQuestionIndex(sessionId, questionIndex)
                 .orElseGet(() -> {
@@ -133,8 +226,11 @@ public class InterviewPersistenceService {
         answer.setQuestion(question);
         answer.setCategory(category);
         answer.setUserAnswer(userAnswer);
-        answer.setScore(score);
-        answer.setFeedback(feedback);
+        // Draft writes must not erase evaluation fields.
+        if (answer.getId() == null) {
+            answer.setScore(score);
+            answer.setFeedback(feedback);
+        }
 
         if (answer.getId() == null) {
             answerMapper.insert(answer);
@@ -145,61 +241,65 @@ public class InterviewPersistenceService {
 
     @Transactional(rollbackFor = Exception.class)
     public void saveReport(String sessionId, InterviewReportDTO report) {
-        findBySessionId(sessionId).ifPresent(session -> {
-            try {
-                session.setOverallScore(report.overallScore());
-                session.setOverallFeedback(report.overallFeedback());
-                session.setStrengthsJson(objectMapper.writeValueAsString(report.strengths()));
-                session.setImprovementsJson(objectMapper.writeValueAsString(report.improvements()));
-                session.setReferenceAnswersJson(objectMapper.writeValueAsString(report.referenceAnswers()));
-                session.setStatus(InterviewSessionEntity.Status.EVALUATED.name());
-                session.setCompletedAt(LocalDateTime.now());
-                sessionMapper.updateById(session);
+        InterviewSessionEntity session = sessionMapper.findBySessionIdForUpdate(sessionId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "面试会话不存在"));
+        try {
+            session.setOverallScore(report.overallScore());
+            session.setOverallFeedback(report.overallFeedback());
+            session.setStrengthsJson(objectMapper.writeValueAsString(report.strengths()));
+            session.setImprovementsJson(objectMapper.writeValueAsString(report.improvements()));
+            session.setReferenceAnswersJson(objectMapper.writeValueAsString(report.referenceAnswers()));
+            session.setCategoryScoresJson(objectMapper.writeValueAsString(report.categoryScores()));
+            session.setStatus(InterviewSessionEntity.Status.EVALUATED.name());
+            session.setEvaluateStatus(InterviewSessionEntity.EvaluateStatus.COMPLETED.name());
+            session.setEvaluateError("");
+            session.setCompletedAt(LocalDateTime.now());
+            sessionMapper.updateById(session);
 
-                // Update each answer with evaluation + reference answer
-                List<InterviewAnswerEntity> existingAnswers = answerMapper.findBySessionId(sessionId);
-                java.util.Map<Integer, InterviewAnswerEntity> answerMap = existingAnswers.stream()
-                        .collect(Collectors.toMap(InterviewAnswerEntity::getQuestionIndex, a -> a, (a1, a2) -> a1));
+            // Update each answer with evaluation + reference answer
+            List<InterviewAnswerEntity> existingAnswers = answerMapper.findBySessionId(sessionId);
+            java.util.Map<Integer, InterviewAnswerEntity> answerMap = existingAnswers.stream()
+                    .collect(Collectors.toMap(InterviewAnswerEntity::getQuestionIndex, a -> a, (a1, a2) -> a1));
 
-                java.util.Map<Integer, InterviewReportDTO.ReferenceAnswer> refMap = new java.util.HashMap<>();
-                if (report.referenceAnswers() != null) {
-                    refMap = report.referenceAnswers().stream()
-                            .collect(Collectors.toMap(
-                                    InterviewReportDTO.ReferenceAnswer::questionIndex, r -> r, (r1, r2) -> r1));
-                }
-
-                for (InterviewReportDTO.QuestionEvaluation eval : report.questionDetails()) {
-                    InterviewAnswerEntity answer = answerMap.get(eval.questionIndex());
-                    if (answer == null) {
-                        answer = new InterviewAnswerEntity();
-                        answer.setSessionId(sessionId);
-                        answer.setQuestionIndex(eval.questionIndex());
-                        answer.setQuestion(eval.question());
-                        answer.setCategory(eval.category());
-                        answer.setUserAnswer(eval.userAnswer());
-                    }
-                    answer.setScore(eval.score());
-                    answer.setFeedback(eval.feedback());
-
-                    InterviewReportDTO.ReferenceAnswer ref = refMap.get(eval.questionIndex());
-                    if (ref != null) {
-                        answer.setReferenceAnswer(ref.referenceAnswer());
-                        if (ref.keyPoints() != null && !ref.keyPoints().isEmpty()) {
-                            answer.setKeyPointsJson(objectMapper.writeValueAsString(ref.keyPoints()));
-                        }
-                    }
-
-                    if (answer.getId() == null) {
-                        answerMapper.insert(answer);
-                    } else {
-                        answerMapper.updateById(answer);
-                    }
-                }
-                log.info("Interview report saved: sessionId={}, score={}", sessionId, report.overallScore());
-            } catch (JacksonException e) {
-                log.error("Failed to serialize report JSON: sessionId={}", sessionId, e);
+            java.util.Map<Integer, InterviewReportDTO.ReferenceAnswer> refMap = new java.util.HashMap<>();
+            if (report.referenceAnswers() != null) {
+                refMap = report.referenceAnswers().stream()
+                        .collect(Collectors.toMap(
+                                InterviewReportDTO.ReferenceAnswer::questionIndex, r -> r, (r1, r2) -> r1));
             }
-        });
+
+            for (InterviewReportDTO.QuestionEvaluation eval : report.questionDetails()) {
+                InterviewAnswerEntity answer = answerMap.get(eval.questionIndex());
+                if (answer == null) {
+                    answer = new InterviewAnswerEntity();
+                    answer.setSessionId(sessionId);
+                    answer.setQuestionIndex(eval.questionIndex());
+                    answer.setQuestion(eval.question());
+                    answer.setCategory(eval.category());
+                    answer.setUserAnswer(eval.userAnswer());
+                }
+                answer.setScore(eval.score());
+                answer.setFeedback(eval.feedback());
+
+                InterviewReportDTO.ReferenceAnswer ref = refMap.get(eval.questionIndex());
+                if (ref != null) {
+                    answer.setReferenceAnswer(ref.referenceAnswer());
+                    if (ref.keyPoints() != null && !ref.keyPoints().isEmpty()) {
+                        answer.setKeyPointsJson(objectMapper.writeValueAsString(ref.keyPoints()));
+                    }
+                }
+
+                if (answer.getId() == null) {
+                    answerMapper.insert(answer);
+                } else {
+                    answerMapper.updateById(answer);
+                }
+            }
+            log.info("Interview report saved: sessionId={}, score={}", sessionId, report.overallScore());
+        } catch (JacksonException e) {
+            log.error("Failed to serialize report JSON: sessionId={}", sessionId, e);
+            throw new BusinessException(ErrorCode.INTERNAL_ERROR, "保存面试报告失败，请重新评估");
+        }
     }
 
     // =================== Queries ===================
@@ -209,15 +309,15 @@ public class InterviewPersistenceService {
     }
 
     public List<InterviewSessionEntity> findByResumeId(Long resumeId) {
-        return sessionMapper.findByResumeId(resumeId);
+        return sessionMapper.findByResumeId(resumeId, requireUserId());
     }
 
     public List<InterviewSessionEntity> findAll() {
-        return sessionMapper.findAllOrderByCreatedAtDesc();
+        return sessionMapper.findAllOrderByCreatedAtDesc(requireUserId());
     }
 
     public Optional<InterviewSessionEntity> findUnfinishedSession(Long resumeId) {
-        return sessionMapper.findUnfinishedByResumeId(resumeId);
+        return sessionMapper.findUnfinishedByResumeId(resumeId, requireUserId());
     }
 
     public List<InterviewAnswerEntity> findAnswersBySessionId(String sessionId) {
@@ -246,9 +346,9 @@ public class InterviewPersistenceService {
     public List<HistoricalQuestion> getHistoricalQuestions(String skillId, Long resumeId) {
         List<InterviewSessionEntity> sessions;
         if (resumeId != null) {
-            sessions = sessionMapper.findRecentByResumeIdAndSkillId(resumeId, skillId);
+            sessions = sessionMapper.findRecentByResumeIdAndSkillId(resumeId, skillId, requireUserId());
         } else {
-            sessions = sessionMapper.findRecentBySkillId(skillId);
+            sessions = sessionMapper.findRecentBySkillId(skillId, requireUserId());
         }
 
         log.info("Loading historical questions: skillId={}, resumeId={}, sessions={}",
@@ -273,5 +373,11 @@ public class InterviewPersistenceService {
                 .filter(hq -> seen.add(hq.question()))
                 .limit(MAX_HISTORICAL_QUESTIONS)
                 .toList();
+    }
+
+    private Long requireUserId() {
+        Long userId = AuthContext.get();
+        if (userId == null) throw new BusinessException(ErrorCode.NOT_AUTHENTICATED);
+        return userId;
     }
 }

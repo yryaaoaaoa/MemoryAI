@@ -13,6 +13,7 @@ import com.jobai.common.BusinessException;
 import com.jobai.common.ErrorCode;
 import com.jobai.common.JobAiProperties.RetrievalProperties;
 import com.jobai.knowledge.config.RetrievalConfigService;
+import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.store.embedding.*;
@@ -29,6 +30,7 @@ import java.util.*;
 
 @Slf4j
 @Repository
+@com.jobai.common.ConditionalOnRagEnabled
 public class ElasticsearchEmbeddingStoreAdapter implements EmbeddingStore<TextSegment> {
 
     private static final String INDEX_NAME = "knowledge_chunk";
@@ -107,9 +109,10 @@ public class ElasticsearchEmbeddingStoreAdapter implements EmbeddingStore<TextSe
             String body = EntityUtils.toString(response.getEntity());
             JsonNode root = objectMapper.readTree(body);
             if (root.has("errors") && root.get("errors").asBoolean()) {
-                log.warn("ES bulk index completed with item-level errors");
+                throw new BusinessException(ErrorCode.EMBEDDING_FAILED, "ES 批量写入存在失败项");
             }
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
+            try { removeAll(ids); } catch (Exception cleanup) { e.addSuppressed(cleanup); }
             throw new BusinessException(ErrorCode.EMBEDDING_FAILED, "ES 批量写入失败: " + e.getMessage());
         }
     }
@@ -170,7 +173,7 @@ public class ElasticsearchEmbeddingStoreAdapter implements EmbeddingStore<TextSe
                 String content = (String) source.get("content");
                 if (content == null || content.isBlank()) continue;
 
-                TextSegment segment = TextSegment.from(content);
+                TextSegment segment = segmentFromSource(content, source);
                 EmbeddingMatch<TextSegment> match = new EmbeddingMatch<>(
                         similarity, hit.id(), queryEmbedding, segment
                 );
@@ -227,8 +230,8 @@ public class ElasticsearchEmbeddingStoreAdapter implements EmbeddingStore<TextSe
                 return s;
             }, Map.class);
 
-            List<EmbeddingMatch<TextSegment>> knnMatches = extractMatches(knnResponse, queryEmbedding, minScore);
-            List<EmbeddingMatch<TextSegment>> bm25Matches = extractMatches(bm25Response, queryEmbedding, minScore);
+            List<EmbeddingMatch<TextSegment>> knnMatches = extractMatches(knnResponse, queryEmbedding, minScore, true);
+            List<EmbeddingMatch<TextSegment>> bm25Matches = extractMatches(bm25Response, queryEmbedding, minScore, false);
 
             return new HybridResult(knnMatches, bm25Matches);
         } catch (IOException e) {
@@ -236,8 +239,8 @@ public class ElasticsearchEmbeddingStoreAdapter implements EmbeddingStore<TextSe
         }
     }
 
-    private List<EmbeddingMatch<TextSegment>> extractMatches(SearchResponse<Map> response,
-                                                              Embedding queryEmbedding, double minScore) {
+    static List<EmbeddingMatch<TextSegment>> extractMatches(SearchResponse<Map> response,
+                                                              Embedding queryEmbedding, double minScore, boolean vector) {
         List<EmbeddingMatch<TextSegment>> matches = new ArrayList<>();
         for (Hit<Map> hit : response.hits().hits()) {
             Map<String, Object> source = hit.source();
@@ -245,13 +248,28 @@ public class ElasticsearchEmbeddingStoreAdapter implements EmbeddingStore<TextSe
             String content = (String) source.get("content");
             if (content == null || content.isBlank()) continue;
 
-            double score = hit.score();
+            if (hit.score() == null) continue;
+            // ES cosine kNN scores are (1 + cosine) / 2; BM25 has a different, unbounded scale.
+            double score = vector ? 2.0 * hit.score() - 1.0 : hit.score();
+            if (vector && score < minScore) continue;
             EmbeddingMatch<TextSegment> match = new EmbeddingMatch<>(
-                    score, hit.id(), queryEmbedding, TextSegment.from(content)
+                    score, hit.id(), queryEmbedding, segmentFromSource(content, source)
             );
             matches.add(match);
         }
         return matches;
+    }
+
+    private static TextSegment segmentFromSource(String content, Map<String, Object> source) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        source.forEach((key, value) -> {
+            if (!"content".equals(key) && !"embedding".equals(key)
+                    && (value instanceof String || value instanceof Integer || value instanceof Long
+                    || value instanceof Float || value instanceof Double)) {
+                metadata.put(key, value);
+            }
+        });
+        return TextSegment.from(content, Metadata.from(metadata));
     }
 
     private RetrievalProperties resolveConfig() {
@@ -312,12 +330,13 @@ public class ElasticsearchEmbeddingStoreAdapter implements EmbeddingStore<TextSe
     public void removeAll(Collection<String> ids) {
         if (ids == null || ids.isEmpty()) return;
         try {
-            client.bulk(b -> {
+            var result = client.bulk(b -> {
                 for (String id : ids) {
                     b.operations(op -> op.delete(d -> d.index(INDEX_NAME).id(id)));
                 }
-                return b;
+                return b.refresh(co.elastic.clients.elasticsearch._types.Refresh.True);
             });
+            if (result.errors()) throw new BusinessException(ErrorCode.RETRIEVAL_FAILED, "ES 批量删除存在失败项");
         } catch (IOException e) {
             throw new BusinessException(ErrorCode.RETRIEVAL_FAILED, "ES 批量删除失败: " + e.getMessage());
         }

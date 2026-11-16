@@ -10,5 +10,5 @@ export interface EsIndexInfo {
 export interface EsDocumentVO {
   id: string
   source: Record<string, unknown>
-  score: number
+  score: number | null
 }

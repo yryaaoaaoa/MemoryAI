@@ -15,6 +15,7 @@ import java.util.Map;
  */
 @Slf4j
 @Service
+@com.jobai.common.ConditionalOnRagEnabled
 public class RerankService {
 
     private static final String RERANK_MODEL = "BAAI/bge-reranker-v2-m3";

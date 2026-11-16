@@ -45,13 +45,11 @@ public class AnswerEvaluationService {
                 .map(q -> new QaRecord(q.questionIndex(), q.question(), q.category(), q.userAnswer()))
                 .toList();
 
-        String skillId = null;
-        try {
-            skillId = persistenceService.findBySessionId(sessionId)
-                    .map(InterviewSessionEntity::getSkillId).orElse(null);
-        } catch (Exception ignored) {}
-
-        String referenceContext = buildReferenceContext(sessionId);
+        InterviewSessionEntity entity = persistenceService.findBySessionId(sessionId)
+                .filter(s -> userId != null && userId.equals(s.getUserId()))
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "面试会话不存在"));
+        var skill = skillService.getSessionSkill(entity.getSkillId(), entity.getSkillSnapshotJson());
+        String referenceContext = skillService.buildEvaluationReferenceSection(skill);
 
         // 将 LangChain4j ChatModel 包装在 LlmChat 函数式接口中
         LlmChat chat = (String system, String user) ->
@@ -69,9 +67,11 @@ public class AnswerEvaluationService {
             persistenceService.saveReport(sessionId, dto);
 
             // 异步生成 LLM 画像（替代旧的 user_mastery 写入）
-            if (userId != null && skillId != null) {
+            try {
                 profileGenerationService.generateOrUpdateProfileAsync(
-                        userId, skillId, report, questions);
+                        userId, skill, report, questions);
+            } catch (Exception e) {
+                log.warn("Could not schedule profile generation for session {}", sessionId, e);
             }
 
             log.info("Evaluation complete: sessionId={}, score={}", sessionId, report.overallScore());
@@ -81,18 +81,6 @@ public class AnswerEvaluationService {
         } catch (Exception e) {
             log.error("Evaluation failed: sessionId={}, error={}", sessionId, e.getMessage(), e);
             throw new BusinessException(ErrorCode.LLM_SERVICE_FAILED, "评估失败: " + e.getMessage());
-        }
-    }
-
-    private String buildReferenceContext(String sessionId) {
-        try {
-            return persistenceService.findBySessionId(sessionId)
-                    .map(InterviewSessionEntity::getSkillId)
-                    .map(skillService::buildEvaluationReferenceSectionSafe)
-                    .orElse("");
-        } catch (Exception e) {
-            log.warn("Failed to load reference context: sessionId={}, error={}", sessionId, e.getMessage());
-            return "";
         }
     }
 

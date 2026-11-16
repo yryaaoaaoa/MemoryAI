@@ -42,6 +42,10 @@ public class UnifiedEvaluationService {
             3. 表达能力（20%）— 逻辑是否清楚，层次是否分明
             4. 实战经验（10%）— 是否结合了实际场景
 
+            题目映射规则：每题都提供明确的 questionIndex。输出必须原样保留该索引，
+            它是整场面试的全局索引，不是本批次的位置；禁止从 0 重新编号或使用展示题号。
+            每个输入索引恰好输出一条评估，不得遗漏或重复；score 必须是 0 到 100 的整数。
+
             严格按以下 JSON 格式输出，不要 markdown 标记：
             {
               "overallScore": 75,
@@ -113,7 +117,7 @@ public class UnifiedEvaluationService {
     }
 
     @SuppressWarnings("unused")
-    private record QuestionEvalDTO(int questionIndex, int score, String feedback,
+    private record QuestionEvalDTO(Integer questionIndex, Integer score, String feedback,
                                    String referenceAnswer, List<String> keyPoints) {
     }
 
@@ -167,12 +171,16 @@ public class UnifiedEvaluationService {
                     return evaluateOneBatch(chat, batch, resumeCtx, refCtx);
                 } catch (Exception e) {
                     log.error("Batch evaluation failed: [{},{}), error={}", batchStart, batchEnd, e.getMessage());
-                    return buildZeroResult(batchStart, batchEnd, "该批次评估失败: " + e.getMessage());
+                    throw new BusinessException(ErrorCode.LLM_SERVICE_FAILED, "面试评估失败，请重新评估");
                 }
             }));
         }
 
-        return futures.stream().map(CompletableFuture::join).toList();
+        try {
+            return futures.stream().map(CompletableFuture::join).toList();
+        } catch (java.util.concurrent.CompletionException e) {
+            throw new BusinessException(ErrorCode.LLM_SERVICE_FAILED, "面试评估失败，请重新评估");
+        }
     }
 
     private BatchResultDTO evaluateOneBatch(LlmChat chat,
@@ -189,18 +197,27 @@ public class UnifiedEvaluationService {
 
         raw = raw.replaceAll("```[a-z]*\\s*", "").replace("```", "").strip();
         try {
-            return mapper.readValue(raw, BatchResultDTO.class);
+            BatchResultDTO result = mapper.readValue(raw, BatchResultDTO.class);
+            var expected = batch.stream().map(QaRecord::questionIndex).collect(Collectors.toSet());
+            var seen = new java.util.HashSet<Integer>();
+            if (result == null || result.questionEvaluations() == null) {
+                throw new IllegalArgumentException("缺少逐题评估");
+            }
+            for (QuestionEvalDTO evaluation : result.questionEvaluations()) {
+                if (evaluation == null || evaluation.questionIndex() == null
+                        || !expected.contains(evaluation.questionIndex()) || !seen.add(evaluation.questionIndex())
+                        || evaluation.score() == null || evaluation.score() < 0 || evaluation.score() > 100
+                        || evaluation.feedback() == null || evaluation.feedback().isBlank()) {
+                    throw new IllegalArgumentException("逐题评估缺失、重复或格式错误，预期索引=" + expected
+                            + "，收到索引=" + (evaluation != null ? evaluation.questionIndex() : null)
+                            + "，分数=" + (evaluation != null ? evaluation.score() : null));
+                }
+            }
+            if (!seen.equals(expected)) throw new IllegalArgumentException("逐题评估不完整，预期索引=" + expected + "，实际索引=" + seen);
+            return result;
         } catch (Exception e) {
             throw new RuntimeException("Failed to parse LLM evaluation output: " + e.getMessage(), e);
         }
-    }
-
-    private BatchResultDTO buildZeroResult(int start, int end, String feedback) {
-        List<QuestionEvalDTO> evals = new ArrayList<>();
-        for (int i = start; i < end; i++) {
-            evals.add(new QuestionEvalDTO(i, 0, feedback, "", List.of()));
-        }
-        return new BatchResultDTO(0, feedback, List.of(), List.of(), evals);
     }
 
     // ==================== 合并 ====================
@@ -217,8 +234,8 @@ public class UnifiedEvaluationService {
         List<QuestionEvalDTO> merged = new ArrayList<>();
         for (int i = 0; i < totalSize; i++) {
             QuestionEvalDTO eval = indexMap.get(i);
-            merged.add(eval != null ? eval : new QuestionEvalDTO(i, 0,
-                    "未生成有效评估", "", List.of()));
+            if (eval == null) throw new BusinessException(ErrorCode.LLM_SERVICE_FAILED, "逐题评估不完整，请重新评估");
+            merged.add(eval);
         }
         return merged;
     }
@@ -347,7 +364,7 @@ public class UnifiedEvaluationService {
     private String buildQaText(List<QaRecord> batch) {
         StringBuilder sb = new StringBuilder();
         for (QaRecord q : batch) {
-            sb.append(String.format("问题%d [%s]: %s\n", q.questionIndex() + 1, q.category(), q.question()));
+            sb.append(String.format("questionIndex: %d\n问题 [%s]: %s\n", q.questionIndex(), q.category(), q.question()));
             sb.append(String.format("回答: %s\n\n", q.userAnswer() != null ? q.userAnswer() : "（未回答）"));
         }
         return sb.toString();

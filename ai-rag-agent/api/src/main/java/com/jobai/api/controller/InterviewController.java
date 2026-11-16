@@ -83,11 +83,14 @@ public class InterviewController {
     @Operation(summary = "获取面试报告（全部答完且评估完成后可用）")
     @GetMapping("/sessions/{sessionId}/report")
     public R<?> getReport(@PathVariable String sessionId) {
-        InterviewReportDTO report = sessionService.getReport(sessionId);
-        if (report == null) {
-            return R.ok(Map.of("ready", false, "message", "评估进行中，请稍后刷新"));
-        }
-        return R.ok(report);
+        return R.ok(sessionService.getReportResponse(sessionId));
+    }
+
+    @Operation(summary = "重新评估失败或中断的面试")
+    @PostMapping("/sessions/{sessionId}/retry-evaluation")
+    public R<Void> retryEvaluation(@PathVariable String sessionId) {
+        sessionService.retryEvaluation(sessionId);
+        return R.ok();
     }
 
     @Operation(summary = "查找未完成的面试（用于断点续传）")

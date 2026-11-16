@@ -34,6 +34,7 @@ export interface UserProfile {
 export interface UserVO {
   id: number
   username: string
+  role: 'user' | 'admin'
 }
 
 export const authApi = {

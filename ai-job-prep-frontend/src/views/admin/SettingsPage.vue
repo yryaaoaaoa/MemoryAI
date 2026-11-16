@@ -2,10 +2,12 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { settingsApi } from '@/api/settings.api'
-import type { RetrievalConfig, RetrievalTier } from '@/api/settings.api'
+import type { RetrievalConfig } from '@/api/settings.api'
 
 const loading = ref(false)
 const saving = ref(false)
+const loaded = ref(false)
+const loadError = ref(false)
 const config = ref<RetrievalConfig>({
   rankConstant: 60,
   numCandidatesFactor: 2,
@@ -21,9 +23,13 @@ const config = ref<RetrievalConfig>({
 
 async function fetchConfig() {
   loading.value = true
+  loaded.value = false
+  loadError.value = false
   try {
     config.value = await settingsApi.getRetrievalConfig()
+    loaded.value = true
   } catch {
+    loadError.value = true
     ElMessage.error('加载配置失败')
   } finally {
     loading.value = false
@@ -31,6 +37,7 @@ async function fetchConfig() {
 }
 
 async function save() {
+  if (!loaded.value || loading.value || saving.value) return
   saving.value = true
   try {
     await settingsApi.saveRetrievalConfig(config.value)
@@ -61,11 +68,12 @@ onMounted(fetchConfig)
       <h2>检索配置</h2>
       <div class="page-actions">
         <el-button @click="reset" :disabled="loading">重置默认</el-button>
-        <el-button type="primary" @click="save" :loading="saving">保存配置</el-button>
+        <el-button type="primary" @click="save" :loading="saving" :disabled="!loaded || loading">保存配置</el-button>
       </div>
     </div>
 
-    <el-form v-if="config" v-loading="loading" class="card-grid">
+    <div v-if="loadError" role="alert">无法读取当前配置。<el-button @click="fetchConfig">重试加载</el-button></div>
+    <el-form v-if="loaded" v-loading="loading" class="card-grid">
       <!-- Hybrid Search — full width -->
       <el-card class="sec-card full-col">
         <template #header>混合检索参数</template>

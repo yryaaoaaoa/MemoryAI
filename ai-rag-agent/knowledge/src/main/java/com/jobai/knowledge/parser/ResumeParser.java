@@ -97,7 +97,7 @@ public class ResumeParser {
             return cleanJsonResponse(json);
         } catch (Exception e) {
             log.error("LLM parsing failed: {}", e.getMessage());
-            return fallback(rawText);
+            throw new com.jobai.common.BusinessException(com.jobai.common.ErrorCode.DOCUMENT_PARSE_FAILED, "简历结构化解析失败，请重试");
         }
     }
 
@@ -112,10 +112,24 @@ public class ResumeParser {
         }
         // Validate it's parseable
         try {
-            objectMapper.readTree(clean);
+            var root = objectMapper.readTree(clean);
+            var sections = root == null ? null : root.get("sections");
+            if (sections == null || !sections.isArray() || sections.isEmpty()) {
+                throw new IllegalArgumentException("缺少有效简历章节");
+            }
+            var types = java.util.Set.of("skills", "experience", "projects", "education", "certificates", "objective", "self", "raw");
+            for (var section : sections) {
+                if (!section.path("type").isTextual() || !types.contains(section.path("type").asText())
+                        || !section.path("content").isTextual() || section.path("content").asText().isBlank()
+                        || !section.path("tags").isArray()) {
+                    throw new IllegalArgumentException("简历章节格式无效");
+                }
+                for (var tag : section.path("tags")) {
+                    if (!tag.isTextual()) throw new IllegalArgumentException("简历标签格式无效");
+                }
+            }
         } catch (Exception e) {
-            log.warn("LLM returned invalid JSON, using fallback");
-            return null;
+            throw new IllegalArgumentException("模型未返回有效简历章节", e);
         }
         return clean;
     }
@@ -133,7 +147,7 @@ public class ResumeParser {
             sec.putArray("tags");
             return objectMapper.writeValueAsString(root);
         } catch (Exception e) {
-            return null;
+            throw new IllegalStateException("无法保存简历原文", e);
         }
     }
 }

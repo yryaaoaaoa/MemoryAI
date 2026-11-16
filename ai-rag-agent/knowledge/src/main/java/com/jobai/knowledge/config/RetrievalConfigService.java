@@ -1,5 +1,7 @@
 package com.jobai.knowledge.config;
 
+import com.jobai.common.auth.AuthContext;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jobai.common.JobAiProperties.RetrievalProperties;
 import lombok.RequiredArgsConstructor;
@@ -12,6 +14,7 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 @Service
 @RequiredArgsConstructor
+@com.jobai.common.ConditionalOnRagEnabled
 public class RetrievalConfigService {
 
     private static final String REDIS_KEY = "retrieval:config";
@@ -34,6 +37,7 @@ public class RetrievalConfigService {
 
     /** Save config to Redis (persisted). */
     public void saveConfig(RetrievalProperties config) {
+        AuthContext.requireAdmin();
         try {
             String json = objectMapper.writeValueAsString(config);
             redis.opsForValue().set(REDIS_KEY, json, 365, TimeUnit.DAYS);
@@ -45,6 +49,7 @@ public class RetrievalConfigService {
 
     /** Reset to application.yml defaults. */
     public void resetConfig() {
+        AuthContext.requireAdmin();
         redis.delete(REDIS_KEY);
         log.info("Retrieval config reset to defaults");
     }

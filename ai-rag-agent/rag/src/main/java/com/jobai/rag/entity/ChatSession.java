@@ -14,6 +14,7 @@ public class ChatSession {
     private String kbIds;
     private Long userId;
     private Long resumeId;
+    private Long noteId;
     private Integer totalPromptTokens;
     private Integer totalCompletionTokens;
     @TableField(fill = FieldFill.INSERT)

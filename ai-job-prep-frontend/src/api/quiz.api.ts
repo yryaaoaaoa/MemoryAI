@@ -98,12 +98,17 @@ export const quizApi = {
 
   /** 批量出题（按知识库 + 出题方向） */
   generateQuiz(kbIds: number[], count = 10, difficulty = 'mixed', topic?: string) {
-    return request.post<any, QuizQuestionDTO[]>('/api/quiz/generate', { kbIds, count, difficulty, topic })
+    return request.post<any, QuizQuestionDTO[]>('/api/quiz/generate', { kbIds, count, difficulty, topic }, { timeout: 180000 })
   },
 
   /** 批量查询题目答题状态 */
   batchStatus(questionIds: number[]) {
     return request.post<any, Record<string, SubmitResult>>('/api/quiz/batch-status', { questionIds })
+  },
+
+  /** 已有答题记录的全部知识点 */
+  listRecordTopics() {
+    return request.get<any, string[]>('/api/quiz/record-topics')
   },
 
   /** 刷题记录（分页） */

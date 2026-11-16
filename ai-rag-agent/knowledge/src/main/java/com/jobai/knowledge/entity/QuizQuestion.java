@@ -10,6 +10,7 @@ import java.time.LocalDateTime;
 public class QuizQuestion {
     @TableId(type = IdType.AUTO)
     private Long id;
+    private Long userId;
     private Long kbId;
     private Long docId;
     private String topic;

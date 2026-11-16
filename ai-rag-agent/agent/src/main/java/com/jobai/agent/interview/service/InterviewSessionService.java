@@ -43,6 +43,8 @@ public class InterviewSessionService {
     // ==================== Create ====================
 
     public InterviewSessionDTO createSession(CreateInterviewRequest request) {
+        requireUserId();
+        Resume ownedResume = request.resumeId() != null ? requireOwnedResume(request.resumeId()) : null;
         if (request.resumeId() != null && !Boolean.TRUE.equals(request.forceCreate())) {
             Optional<InterviewSessionDTO> unfinished = findUnfinishedSession(request.resumeId());
             if (unfinished.isPresent()) {
@@ -60,8 +62,7 @@ public class InterviewSessionService {
         // Load resume text if resumeId provided
         String resumeText = request.resumeText();
         if (resumeText == null && request.resumeId() != null) {
-            Resume resume = resumeMapper.selectById(request.resumeId());
-            if (resume != null) resumeText = resume.getRawText();
+            resumeText = ownedResume.getRawText();
         }
 
         if (MODE_DYNAMIC.equals(mode)) {
@@ -71,11 +72,12 @@ public class InterviewSessionService {
         // — Batch mode (existing) —
         // Load historical questions for deduplication
         List<HistoricalQuestion> history = persistenceService.getHistoricalQuestions(skillId, request.resumeId());
+        SkillDTO skill = resolveSkill(skillId, request.jdText());
 
         // Generate ALL questions at once (batch generation)
         // For custom JD (skillId="custom"), jdText is passed to resolve categories and refs
         List<InterviewQuestionDTO> questions = questionService.generateQuestions(
-                skillId, difficulty, resumeText, request.resumeId(), request.questionCount(), history, request.jdText());
+                skill, difficulty, resumeText, request.resumeId(), request.questionCount(), history);
 
         // Count main questions for display purposes
         int mainCount = (int) questions.stream().filter(q -> !q.isFollowUp()).count();
@@ -83,16 +85,14 @@ public class InterviewSessionService {
         log.info("Interview session created (batch): sessionId={}, skill={}, questions={}(main={})",
                 sessionId, skillId, questions.size(), mainCount);
 
-        // Cache in Redis
+        persistenceService.saveSession(sessionId, request.resumeId(), request.questionCount(),
+                questions, request.llmProvider(), skillId, difficulty, MODE_BATCH, resumeText, null, skill);
+
+        // Cache only after the durable record exists.
         sessionCache.saveSession(sessionId,
                 resumeText != null ? resumeText : "",
                 request.resumeId(), questions, 0,
-                InterviewSessionDTO.Status.CREATED.name());
-        sessionCache.updateMainQuestionCount(sessionId, mainCount);
-
-        // Persist to MySQL
-        persistenceService.saveSession(sessionId, request.resumeId(), request.questionCount(),
-                questions, request.llmProvider(), skillId, difficulty, MODE_BATCH);
+                InterviewSessionDTO.Status.CREATED.name(), mainCount, null, skillId, difficulty, MODE_BATCH);
 
         return new InterviewSessionDTO(sessionId,
                 resumeText != null ? resumeText : "",
@@ -118,7 +118,7 @@ public class InterviewSessionService {
         List<RemainingCategory> remaining = buildRemainingCategories(allocation, questions);
 
         NextAction first = dynamicQuestionService.decide(
-                skillId, difficulty, request.resumeId(), resumeText, questions, remaining, null, null);
+                skill, difficulty, request.resumeId(), resumeText, questions, remaining, null, null);
 
         InterviewQuestionDTO firstQ = toInterviewQuestion(first, questions);
         questions.add(firstQ);
@@ -129,16 +129,15 @@ public class InterviewSessionService {
         log.info("Interview session created (dynamic): sessionId={}, skill={}, firstQ={}, estimatedTotal={}",
                 sessionId, skillId, firstQ.questionIndex(), approximateTotal);
 
-        // Cache in Redis
+        persistenceService.saveSession(sessionId, request.resumeId(), approximateTotal,
+                questions, request.llmProvider(), skillId, difficulty, MODE_DYNAMIC, resumeText, allocationsJson, skill);
+
+        // Cache only after the durable record exists.
         sessionCache.saveSession(sessionId,
                 resumeText != null ? resumeText : "",
                 request.resumeId(), questions, 0,
                 InterviewSessionDTO.Status.CREATED.name(),
                 approximateTotal, allocationsJson, skillId, difficulty, MODE_DYNAMIC);
-
-        // Persist to MySQL
-        persistenceService.saveSession(sessionId, request.resumeId(), approximateTotal,
-                questions, request.llmProvider(), skillId, difficulty, MODE_DYNAMIC);
 
         return new InterviewSessionDTO(sessionId,
                 resumeText != null ? resumeText : "",
@@ -161,8 +160,12 @@ public class InterviewSessionService {
     // ==================== Read ====================
 
     public InterviewSessionDTO getSession(String sessionId) {
+        InterviewSessionEntity entity = requireOwnedSession(sessionId);
         Optional<CachedSession> cached = sessionCache.getSession(sessionId);
-        if (cached.isPresent()) return toDTO(cached.get());
+        if (cached.isPresent() && isCacheCurrent(cached.get(), entity)) {
+            cached.get().setStatus(entity.getStatus());
+            return toDTO(cached.get());
+        }
 
         CachedSession restored = restoreFromDb(sessionId);
         if (restored == null) throw new BusinessException(ErrorCode.NOT_FOUND, "面试会话不存在");
@@ -170,11 +173,7 @@ public class InterviewSessionService {
     }
 
     public Optional<InterviewSessionDTO> findUnfinishedSession(Long resumeId) {
-        Optional<String> cachedId = sessionCache.findUnfinishedSessionId(resumeId);
-        if (cachedId.isPresent()) {
-            return sessionCache.getSession(cachedId.get()).map(this::toDTO);
-        }
-
+        requireOwnedResume(resumeId);
         return persistenceService.findUnfinishedSession(resumeId)
                 .flatMap(entity -> {
                     CachedSession restored = restoreFromEntity(entity);
@@ -199,18 +198,14 @@ public class InterviewSessionService {
 
     public InterviewQuestionDTO getCurrentQuestion(String sessionId) {
         CachedSession session = getOrRestore(sessionId);
+        if ("COMPLETED".equals(session.getStatus()) || "EVALUATED".equals(session.getStatus())) return null;
         List<InterviewQuestionDTO> questions = session.getQuestions(objectMapper);
 
         if (session.getCurrentIndex() >= questions.size()) return null;
 
         if ("CREATED".equals(session.getStatus())) {
+            persistenceService.updateSessionStatus(sessionId, InterviewSessionEntity.Status.IN_PROGRESS.name());
             sessionCache.updateStatus(sessionId, InterviewSessionDTO.Status.IN_PROGRESS.name());
-            try {
-                persistenceService.updateSessionStatus(sessionId,
-                        InterviewSessionEntity.Status.IN_PROGRESS.name());
-            } catch (Exception e) {
-                log.warn("Failed to update status: {}", e.getMessage());
-            }
         }
 
         return questions.get(session.getCurrentIndex());
@@ -219,11 +214,12 @@ public class InterviewSessionService {
     // ==================== Submit / Save ====================
 
     public SubmitAnswerResponse submitAnswer(SubmitAnswerRequest request) {
+        requireActiveSession(request.sessionId());
         CachedSession session = getOrRestore(request.sessionId());
         List<InterviewQuestionDTO> questions = session.getQuestions(objectMapper);
 
         int index = request.questionIndex();
-        if (index != session.getCurrentIndex()) {
+        if (index < 0 || index >= questions.size() || index != session.getCurrentIndex()) {
             throw new BusinessException(ErrorCode.BAD_REQUEST,
                     "只能提交当前问题 (current=" + session.getCurrentIndex() + ", submitted=" + index + ")");
         }
@@ -231,11 +227,11 @@ public class InterviewSessionService {
         // Save the answer
         InterviewQuestionDTO q = questions.get(index);
         questions.set(index, q.withAnswer(request.answer()));
-        sessionCache.updateQuestions(request.sessionId(), questions);
 
         // Persist answer to DB
         persistenceService.saveAnswer(request.sessionId(), index,
                 q.question(), q.category(), request.answer(), 0, null);
+        sessionCache.updateQuestions(request.sessionId(), questions);
 
         // Dynamic mode: generate next question based on answer quality
         if (MODE_DYNAMIC.equals(session.getMode())) {
@@ -248,19 +244,10 @@ public class InterviewSessionService {
 
         if (isLastQuestion) {
             // All questions answered → complete and trigger async evaluation
-            sessionCache.updateStatus(request.sessionId(), InterviewSessionDTO.Status.COMPLETED.name());
+            markCompleted(request.sessionId(), questions, nextIndex);
             sessionCache.updateCurrentIndex(request.sessionId(), nextIndex);
 
-            try {
-                persistenceService.updateSessionStatus(request.sessionId(),
-                        InterviewSessionEntity.Status.COMPLETED.name());
-                persistenceService.updateEvaluateStatus(request.sessionId(),
-                        InterviewSessionEntity.EvaluateStatus.PENDING.name(), null);
-            } catch (Exception e) {
-                log.warn("Failed to complete session: {}", e.getMessage());
-            }
-
-            evaluationService.evaluateAsync(request.sessionId(), AuthContext.get());
+            scheduleEvaluation(request.sessionId());
             log.info("Interview completed (batch): sessionId={}, totalQuestions={}",
                     request.sessionId(), questions.size());
 
@@ -268,12 +255,8 @@ public class InterviewSessionService {
         }
 
         // Advance to next question
+        persistenceService.saveProgress(request.sessionId(), questions, nextIndex);
         sessionCache.updateCurrentIndex(request.sessionId(), nextIndex);
-        try {
-            persistenceService.updateCurrentQuestionIndex(request.sessionId(), nextIndex);
-        } catch (Exception e) {
-            log.warn("Failed to update index: {}", e.getMessage());
-        }
 
         InterviewQuestionDTO nextQuestion = questions.get(nextIndex);
 
@@ -293,14 +276,16 @@ public class InterviewSessionService {
 
         // 2. Get L4 reference content for the current category
         String currentCategory = findCurrentCategory(questions);
-        String referenceContent = skillService.buildCategoryReference(session.getSkillId(), currentCategory);
+        InterviewSessionEntity entity = requireOwnedSession(sessionId);
+        SkillDTO skill = skillService.getSessionSkill(entity.getSkillId(), entity.getSkillSnapshotJson());
+        String referenceContent = skillService.buildCategoryReference(skill, currentCategory);
 
         // 3. Get L2 context summary
         String contextSummary = session.getContextSummary();
 
         // 4. Call DynamicQuestionService.decide()
         NextAction next = dynamicQuestionService.decide(
-                session.getSkillId(), session.getDifficulty(),
+                skill, session.getDifficulty(),
                 session.getResumeId(), session.getResumeText(), questions, remaining,
                 contextSummary, referenceContent);
 
@@ -311,13 +296,14 @@ public class InterviewSessionService {
 
         if ("complete".equals(next.action())) {
             // All categories sufficiently covered → end interview
-            completeDynamicSession(sessionId, nextIndex);
+            completeDynamicSession(sessionId, questions, nextIndex);
             return new SubmitAnswerResponse(false, null, nextIndex, questions.size());
         }
 
         // 5. Create new question and append
         InterviewQuestionDTO newQuestion = toInterviewQuestion(next, questions);
         questions.add(newQuestion);
+        persistenceService.saveProgress(sessionId, questions, nextIndex);
         sessionCache.updateQuestions(sessionId, questions);
         sessionCache.updateCurrentIndex(sessionId, nextIndex);
 
@@ -328,8 +314,8 @@ public class InterviewSessionService {
                 String newSummary = dynamicQuestionService.compressSummary(
                         contextSummary, questions, window.windowStartIndex());
                 if (!newSummary.equals(contextSummary)) {
-                    sessionCache.updateContextSummary(sessionId, newSummary);
                     persistenceService.updateContextSummary(sessionId, newSummary);
+                    sessionCache.updateContextSummary(sessionId, newSummary);
                 }
             } catch (Exception e) {
                 log.warn("L2 compression failed: sessionId={}, error={}", sessionId, e.getMessage());
@@ -342,24 +328,16 @@ public class InterviewSessionService {
         return new SubmitAnswerResponse(true, newQuestion, nextIndex, questions.size());
     }
 
-    private void completeDynamicSession(String sessionId, int nextIndex) {
-        sessionCache.updateStatus(sessionId, InterviewSessionDTO.Status.COMPLETED.name());
+    private void completeDynamicSession(String sessionId, List<InterviewQuestionDTO> questions, int nextIndex) {
+        markCompleted(sessionId, questions, nextIndex);
         sessionCache.updateCurrentIndex(sessionId, nextIndex);
 
-        try {
-            persistenceService.updateSessionStatus(sessionId,
-                    InterviewSessionEntity.Status.COMPLETED.name());
-            persistenceService.updateEvaluateStatus(sessionId,
-                    InterviewSessionEntity.EvaluateStatus.PENDING.name(), null);
-        } catch (Exception e) {
-            log.warn("Failed to complete dynamic session: {}", e.getMessage());
-        }
-
-        evaluationService.evaluateAsync(sessionId, AuthContext.get());
+        scheduleEvaluation(sessionId);
         log.info("Interview completed (dynamic): sessionId={}", sessionId);
     }
 
     public void saveAnswer(SubmitAnswerRequest request) {
+        requireActiveSession(request.sessionId());
         CachedSession session = getOrRestore(request.sessionId());
         List<InterviewQuestionDTO> questions = session.getQuestions(objectMapper);
 
@@ -369,58 +347,74 @@ public class InterviewSessionService {
         }
 
         InterviewQuestionDTO q = questions.get(index);
+        persistenceService.saveAnswer(request.sessionId(), index,
+                q.question(), q.category(), request.answer(), 0, null);
         questions.set(index, q.withAnswer(request.answer()));
 
         sessionCache.updateQuestions(request.sessionId(), questions);
 
         if ("CREATED".equals(session.getStatus())) {
+            persistenceService.updateSessionStatus(request.sessionId(), InterviewSessionEntity.Status.IN_PROGRESS.name());
             sessionCache.updateStatus(request.sessionId(),
                     InterviewSessionDTO.Status.IN_PROGRESS.name());
-            try {
-                persistenceService.updateSessionStatus(request.sessionId(),
-                        InterviewSessionEntity.Status.IN_PROGRESS.name());
-            } catch (Exception e) {
-                log.warn("Failed to sync status to DB: {}", e.getMessage());
-            }
-        }
-
-        try {
-            persistenceService.saveAnswer(request.sessionId(), index,
-                    q.question(), q.category(), request.answer(), 0, null);
-        } catch (Exception e) {
-            log.warn("Failed to save answer: {}", e.getMessage());
         }
     }
 
     // ==================== Complete ====================
 
     public void completeInterview(String sessionId) {
+        requireActiveSession(sessionId);
         CachedSession session = getOrRestore(sessionId);
 
         if ("COMPLETED".equals(session.getStatus()) || "EVALUATED".equals(session.getStatus())) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "面试已结束");
         }
 
-        sessionCache.updateStatus(sessionId, InterviewSessionDTO.Status.COMPLETED.name());
+        markCompleted(sessionId, null, null);
 
-        try {
-            persistenceService.updateSessionStatus(sessionId,
-                    InterviewSessionEntity.Status.COMPLETED.name());
-            persistenceService.updateEvaluateStatus(sessionId,
-                    InterviewSessionEntity.EvaluateStatus.PENDING.name(), null);
-        } catch (Exception e) {
-            log.warn("Failed to complete session: {}", e.getMessage());
-        }
-
-        evaluationService.evaluateAsync(sessionId, AuthContext.get());
+        scheduleEvaluation(sessionId);
         log.info("Interview completed early: sessionId={}", sessionId);
+    }
+
+    private void markCompleted(String sessionId, List<InterviewQuestionDTO> questions, Integer index) {
+        persistenceService.completeSession(sessionId, questions, index);
+        sessionCache.updateStatus(sessionId, InterviewSessionDTO.Status.COMPLETED.name());
     }
 
     // ==================== Report ====================
 
+    public void retryEvaluation(String sessionId) {
+        requireOwnedSession(sessionId);
+        persistenceService.requestEvaluationRetry(sessionId, requireUserId());
+        scheduleEvaluation(sessionId);
+    }
+
+    private void scheduleEvaluation(String sessionId) {
+        try {
+            evaluationService.evaluateAsync(sessionId, requireUserId());
+        } catch (Exception e) {
+            persistenceService.updateEvaluateStatus(sessionId, "FAILED", "评估任务未能启动，请重新评估");
+            throw new BusinessException(ErrorCode.SERVICE_UNAVAILABLE, "评估任务未能启动，请重新评估");
+        }
+    }
+
+    public Object getReportResponse(String sessionId) {
+        InterviewSessionEntity entity = requireOwnedSession(sessionId);
+        if ("COMPLETED".equals(entity.getStatus())) {
+            String status = entity.getEvaluateStatus() != null ? entity.getEvaluateStatus() : "PENDING";
+            if ("FAILED".equals(status)) {
+                return Map.of("ready", false, "status", status, "error",
+                        entity.getEvaluateError() != null ? entity.getEvaluateError() : "评估失败，请重新评估");
+            }
+            if ("PENDING".equals(status) || "PROCESSING".equals(status)) {
+                return Map.of("ready", false, "status", status, "message", "评估进行中，请稍后刷新");
+            }
+        }
+        return getReport(sessionId);
+    }
+
     public InterviewReportDTO getReport(String sessionId) {
-        InterviewSessionEntity entity = persistenceService.findBySessionId(sessionId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "面试会话不存在"));
+        InterviewSessionEntity entity = requireOwnedSession(sessionId);
 
         if (!"EVALUATED".equals(entity.getStatus()) && !"COMPLETED".equals(entity.getStatus())) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "面试尚未完成");
@@ -464,11 +458,24 @@ public class InterviewSessionService {
                             a.getFeedback() != null ? a.getFeedback() : ""))
                     .toList();
 
+            List<InterviewReportDTO.CategoryScore> categoryScores;
+            if (entity.getCategoryScoresJson() != null && !entity.getCategoryScoresJson().isBlank()) {
+                categoryScores = objectMapper.readValue(entity.getCategoryScoresJson(),
+                        typeFactory.constructCollectionType(List.class, InterviewReportDTO.CategoryScore.class));
+            } else {
+                // Older reports predate category_scores_json: rebuild from their saved marks.
+                Map<String, IntSummaryStatistics> stats = questionDetails.stream().collect(Collectors.groupingBy(
+                        q -> q.category() != null ? q.category() : "综合", LinkedHashMap::new,
+                        Collectors.summarizingInt(InterviewReportDTO.QuestionEvaluation::score)));
+                categoryScores = stats.entrySet().stream().map(e -> new InterviewReportDTO.CategoryScore(
+                        e.getKey(), (int) Math.round(e.getValue().getAverage()), (int) e.getValue().getCount())).toList();
+            }
+
             return new InterviewReportDTO(
                     entity.getSessionId(),
                     entity.getTotalQuestions() != null ? entity.getTotalQuestions() : 0,
                     entity.getOverallScore() != null ? entity.getOverallScore() : 0,
-                    List.of(), // categoryScores not persisted separately — LLM recalculates
+                    categoryScores,
                     questionDetails,
                     entity.getOverallFeedback() != null ? entity.getOverallFeedback() : "",
                     strengths,
@@ -501,6 +508,7 @@ public class InterviewSessionService {
     }
 
     public void deleteSession(String sessionId) {
+        requireOwnedSession(sessionId);
         sessionCache.deleteSession(sessionId);
         persistenceService.deleteSessionBySessionId(sessionId);
         log.info("Session deleted: sessionId={}", sessionId);
@@ -509,8 +517,10 @@ public class InterviewSessionService {
     // ==================== Private Helpers ====================
 
     private CachedSession getOrRestore(String sessionId) {
+        InterviewSessionEntity entity = requireOwnedSession(sessionId);
         Optional<CachedSession> cached = sessionCache.getSession(sessionId);
-        if (cached.isPresent()) {
+        if (cached.isPresent() && isCacheCurrent(cached.get(), entity)) {
+            cached.get().setStatus(entity.getStatus());
             sessionCache.refreshTTL(sessionId);
             return cached.get();
         }
@@ -523,6 +533,17 @@ public class InterviewSessionService {
         return persistenceService.findBySessionId(sessionId)
                 .map(this::restoreFromEntity)
                 .orElse(null);
+    }
+
+    private boolean isCacheCurrent(CachedSession cached, InterviewSessionEntity entity) {
+        return Objects.equals(cached.getCurrentIndex(), entity.getCurrentQuestionIndex())
+                && Objects.equals(cached.getQuestionsJson(), entity.getQuestionsJson())
+                && Objects.equals(cached.getResumeId(), entity.getResumeId())
+                && Objects.equals(cached.getResumeText(), entity.getResumeText() != null ? entity.getResumeText() : "")
+                && Objects.equals(cached.getAllocationsJson(), entity.getAllocationsJson())
+                && Objects.equals(cached.getMode(), entity.getMode())
+                && Objects.equals(cached.getSkillId(), entity.getSkillId())
+                && Objects.equals(cached.getDifficulty(), entity.getDifficulty());
     }
 
     private CachedSession restoreFromEntity(InterviewSessionEntity entity) {
@@ -543,19 +564,23 @@ public class InterviewSessionService {
             }
 
             // Count main questions for proper display
-            int mainCount = (int) questions.stream().filter(q -> !q.isFollowUp()).count();
+            int mainCount = MODE_DYNAMIC.equals(entity.getMode()) && entity.getTotalQuestions() != null
+                    ? entity.getTotalQuestions() : (int) questions.stream().filter(q -> !q.isFollowUp()).count();
 
             // Load resume text for cache restore
-            String resumeText = "";
-            if (entity.getResumeId() != null) {
+            String resumeText = entity.getResumeText();
+            if (resumeText == null && entity.getResumeId() != null) {
                 Resume resume = resumeMapper.selectById(entity.getResumeId());
-                if (resume != null) resumeText = resume.getRawText() != null ? resume.getRawText() : "";
+                if (resume != null && Objects.equals(resume.getUserId(), entity.getUserId())) {
+                    resumeText = resume.getRawText();
+                }
             }
+            if (resumeText == null) resumeText = "";
 
             // Populate cache (restore mode for dynamic sessions)
             sessionCache.saveSession(entity.getSessionId(), resumeText, entity.getResumeId(),
                     questions, entity.getCurrentQuestionIndex(), entity.getStatus(),
-                    mainCount, null, entity.getSkillId(), entity.getDifficulty(),
+                    mainCount, entity.getAllocationsJson(), entity.getSkillId(), entity.getDifficulty(),
                     entity.getMode());
 
             // Restore L2 context summary (kept for potential future adaptive mode)
@@ -581,6 +606,43 @@ public class InterviewSessionService {
         return new InterviewSessionDTO(session.getSessionId(), session.getResumeText(),
                 displayTotal,
                 session.getCurrentIndex(), questions, session.getStatus(), mode);
+    }
+
+    private Long requireUserId() {
+        Long userId = AuthContext.get();
+        if (userId == null) throw new BusinessException(ErrorCode.NOT_AUTHENTICATED);
+        return userId;
+    }
+
+    private InterviewSessionEntity requireOwnedSession(String sessionId) {
+        Long userId = requireUserId();
+        InterviewSessionEntity entity = persistenceService.findBySessionId(sessionId)
+                .filter(s -> userId.equals(s.getUserId()))
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "面试会话不存在"));
+        // Pre-fix sessions may be owned by this user but reference another user's resume.
+        if (entity.getResumeId() != null && entity.getResumeText() == null) {
+            Resume resume = resumeMapper.selectById(entity.getResumeId());
+            if (resume == null || !userId.equals(resume.getUserId())) {
+                throw new BusinessException(ErrorCode.NOT_FOUND, "面试会话不存在");
+            }
+        }
+        return entity;
+    }
+
+    private void requireActiveSession(String sessionId) {
+        String status = requireOwnedSession(sessionId).getStatus();
+        if (!"CREATED".equals(status) && !"IN_PROGRESS".equals(status)) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "面试已结束，不能修改答案");
+        }
+    }
+
+    private Resume requireOwnedResume(Long resumeId) {
+        Long userId = requireUserId();
+        Resume resume = resumeMapper.selectById(resumeId);
+        if (resume == null || !userId.equals(resume.getUserId()) || resume.getDeletedAt() != null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "简历不存在");
+        }
+        return resume;
     }
 
     // ==================== Dynamic Mode Helpers ====================

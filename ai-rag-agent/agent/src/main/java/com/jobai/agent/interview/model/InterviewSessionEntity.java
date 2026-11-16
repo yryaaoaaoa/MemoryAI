@@ -18,6 +18,7 @@ public class InterviewSessionEntity {
 
     private String sessionId;
     private String skillId;
+    private String skillSnapshotJson;
     private String difficulty;
     private Long resumeId;
     private Integer totalQuestions;
@@ -28,6 +29,9 @@ public class InterviewSessionEntity {
 
     /** JSON: List&lt;InterviewQuestionDTO&gt; */
     private String questionsJson;
+    private String allocationsJson;
+    private String resumeText;
+    private String categoryScoresJson;
 
     private Integer overallScore;
     private String overallFeedback;

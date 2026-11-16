@@ -17,6 +17,7 @@ import java.util.Map;
 
 @Service
 @ConditionalOnProperty(name = "jobai.embedding.provider", havingValue = "siliconflow", matchIfMissing = true)
+@com.jobai.common.ConditionalOnRagEnabled
 public class SiliconFlowEmbeddingModel implements EmbeddingModel {
 
     private final RestClient restClient;

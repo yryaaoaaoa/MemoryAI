@@ -1,6 +1,7 @@
 package com.jobai.rag.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jobai.common.BusinessException;
 import com.jobai.common.ErrorCode;
@@ -44,7 +45,8 @@ public class ChatSessionService {
         return session;
     }
 
-    public List<ChatMessage> loadHistory(Long sessionId) {
+    public List<ChatMessage> loadHistory(Long sessionId, Long userId) {
+        assertOwnership(sessionId, userId);
         List<ChatMessage> recent = chatMessageMapper.findRecentBySessionId(sessionId, N_PLUS_1_LIMIT);
         if (recent.size() <= 1) return List.of();
         List<ChatMessage> history = recent.subList(1, recent.size());
@@ -52,11 +54,11 @@ public class ChatSessionService {
         return history;
     }
 
-    public ChatMessage appendMessage(Long sessionId, String role, String content, int order) {
+    private ChatMessage appendMessage(Long sessionId, String role, String content, int order) {
         return appendMessage(sessionId, role, content, order, null);
     }
 
-    public ChatMessage appendMessage(Long sessionId, String role, String content, int order, String metadata) {
+    private ChatMessage appendMessage(Long sessionId, String role, String content, int order, String metadata) {
         ChatMessage msg = new ChatMessage();
         msg.setSessionId(sessionId);
         msg.setRole(role);
@@ -73,7 +75,18 @@ public class ChatSessionService {
      * 将最近的 {@code WINDOW_ROUNDS} 完整轮次保留为完整消息，
      * 并将较早轮次的 LLM 压缩摘要注入系统提示中。
      */
-    public ChatContext loadHistoryWithContext(Long sessionId) {
+    @Transactional
+    public ChatContext beginUserTurn(Long sessionId, Long userId, String message) {
+        // Lock before allocating message_order; reject foreign sessions before any write or history read.
+        assertOwner(chatSessionMapper.selectForUpdate(sessionId), userId);
+        Integer reserved = chatMessageMapper.selectMaxReservedOrder(sessionId);
+        int userOrder = reserved == null ? 0 : reserved + 1;
+        appendMessage(sessionId, "user", message, userOrder);
+        ChatContext context = loadHistoryWithContext(sessionId);
+        return new ChatContext(context.summariesText(), context.windowMessages(), context.resumeText(), userOrder + 1);
+    }
+
+    private ChatContext loadHistoryWithContext(Long sessionId) {
         int totalUserMsgs = chatMessageMapper.countUserMessages(sessionId);
         int effectiveUserMsgs = totalUserMsgs - 1; // exclude the just-saved current user message
 
@@ -116,15 +129,22 @@ public class ChatSessionService {
     /**
      * 获取指定会话关联的简历原始文本。
      */
-    public String getResumeText(Long sessionId) {
+    private String getResumeText(Long sessionId) {
         ChatSession session = chatSessionMapper.selectById(sessionId);
         if (session == null || session.getResumeId() == null) return "";
         Resume resume = resumeMapper.selectById(session.getResumeId());
-        if (resume == null || resume.getRawText() == null) return "";
+        // Ignore legacy associations created before ownership validation was introduced.
+        if (resume == null || !java.util.Objects.equals(session.getUserId(), resume.getUserId())
+                || resume.getRawText() == null) return "";
         return resume.getRawText();
     }
 
-    public record ChatContext(String summariesText, List<ChatMessage> windowMessages, String resumeText) {
+    public record ChatContext(String summariesText, List<ChatMessage> windowMessages, String resumeText,
+                              Integer replyOrder) {
+
+        public ChatContext(String summariesText, List<ChatMessage> windowMessages, String resumeText) {
+            this(summariesText, windowMessages, resumeText, null);
+        }
 
         public ChatContext(String summariesText, List<ChatMessage> windowMessages) {
             this(summariesText, windowMessages, "");
@@ -136,11 +156,17 @@ public class ChatSessionService {
      */
     public void setSessionResume(Long sessionId, Long resumeId, Long userId) {
         assertOwnership(sessionId, userId);
-        ChatSession session = chatSessionMapper.selectById(sessionId);
-        if (session != null) {
-            session.setResumeId(resumeId);
-            chatSessionMapper.updateById(session);
+        if (resumeId != null) {
+            Resume resume = resumeMapper.selectById(resumeId);
+            if (resume == null) throw new BusinessException(ErrorCode.NOT_FOUND, "简历不存在");
+            if (!userId.equals(resume.getUserId())) {
+                throw new BusinessException(ErrorCode.FORBIDDEN, "无权关联此简历");
+            }
         }
+        // Explicit SET also permits clearing a previously associated resume.
+        chatSessionMapper.update(null, new LambdaUpdateWrapper<ChatSession>()
+                .eq(ChatSession::getId, sessionId).eq(ChatSession::getUserId, userId)
+                .set(ChatSession::getResumeId, resumeId));
     }
 
     /**
@@ -148,7 +174,8 @@ public class ChatSessionService {
      * 防止多轮流产生多条消息时的部分持久化问题。
      */
     @Transactional
-    public void batchAppend(Long sessionId, List<Map<String, Object>> messages) {
+    public void batchAppend(Long sessionId, Long userId, List<Map<String, Object>> messages) {
+        assertOwner(chatSessionMapper.selectForUpdate(sessionId), userId);
         if (messages.isEmpty()) return;
         int order = nextOrder(sessionId);
         for (Map<String, Object> msg : messages) {
@@ -165,8 +192,18 @@ public class ChatSessionService {
         }
     }
 
+    /** Save into the slot allocated with the user message, even if a later turn finished first. */
+    @Transactional
+    public Long appendReply(Long sessionId, Long userId, int replyOrder, Map<String, Object> reply) {
+        assertOwner(chatSessionMapper.selectForUpdate(sessionId), userId);
+        return appendMessage(sessionId, "assistant", (String) reply.getOrDefault("content", ""),
+                replyOrder, buildMetadata(reply)).getId();
+    }
+
     private static String buildMetadata(Map<String, Object> msg) {
         Map<String, Object> meta = new LinkedHashMap<>();
+        if (msg.containsKey("response_status")) meta.put("response_status", msg.get("response_status"));
+        if (msg.containsKey("error_message")) meta.put("error_message", msg.get("error_message"));
         if (msg.containsKey("tool_calls")) {
             meta.put("tool_calls", msg.get("tool_calls"));
         }
@@ -205,7 +242,8 @@ public class ChatSessionService {
                         .orderByAsc(ChatMessage::getMessageOrder));
     }
 
-    public void updateTitle(Long sessionId, String title) {
+    public void updateTitle(Long sessionId, String title, Long userId) {
+        assertOwnership(sessionId, userId);
         ChatSession s = chatSessionMapper.selectById(sessionId);
         if (s != null) {
             s.setTitle(title);
@@ -213,6 +251,7 @@ public class ChatSessionService {
         }
     }
 
+    @Transactional
     public void deleteSession(Long sessionId, Long userId) {
         assertOwnership(sessionId, userId);
         chatMessageMapper.delete(new LambdaQueryWrapper<ChatMessage>()
@@ -229,10 +268,14 @@ public class ChatSessionService {
 
     private void assertOwnership(Long sessionId, Long userId) {
         ChatSession session = chatSessionMapper.selectById(sessionId);
+        assertOwner(session, userId);
+    }
+
+    private void assertOwner(ChatSession session, Long userId) {
         if (session == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "会话不存在");
         }
-        if (!userId.equals(session.getUserId())) {
+        if (userId == null || !userId.equals(session.getUserId())) {
             throw new BusinessException(ErrorCode.FORBIDDEN, "无权访问此会话");
         }
     }

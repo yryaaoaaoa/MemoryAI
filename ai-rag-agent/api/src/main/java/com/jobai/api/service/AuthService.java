@@ -25,6 +25,7 @@ public class AuthService {
         }
         User user = new User();
         user.setUsername(username);
+        user.setRole("user");
         user.setPasswordHash(passwordEncoder.encode(rawPassword));
         userMapper.insert(user);
         return user;

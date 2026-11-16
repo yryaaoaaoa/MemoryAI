@@ -1,37 +1,78 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, watch, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { interviewApi } from '@/api/interview.api'
 import type { InterviewReportDTO } from '@/api/interview.api'
 
 const route = useRoute()
 const router = useRouter()
-const sessionId = route.params.sessionId as string
+let requestVersion = 0
+let pollTimer: ReturnType<typeof setTimeout> | null = null
 
 const report = ref<InterviewReportDTO | null>(null)
 const loading = ref(true)
 const polling = ref(false)
 const error = ref('')
+const canRetryEvaluation = ref(false)
+const retrying = ref(false)
 
-async function fetchReport() {
+async function fetchReport(sessionId: string, version: number) {
   loading.value = true
   polling.value = false
+  error.value = ''
+  canRetryEvaluation.value = false
   try {
     const res = await interviewApi.getReport(sessionId)
+    if (version !== requestVersion) return
     if (res && 'ready' in res && res.ready === false) {
+      if (res.status === 'FAILED') {
+        error.value = res.error || '评估失败，请重新评估'
+        canRetryEvaluation.value = true
+        return
+      }
       polling.value = true
-      setTimeout(fetchReport, 3000)
+      pollTimer = setTimeout(() => fetchReport(sessionId, version), 3000)
       return
     }
     report.value = res as InterviewReportDTO
   } catch (e: any) {
+    if (version !== requestVersion) return
     error.value = e?.message || '加载失败'
   } finally {
-    loading.value = false
+    if (version === requestVersion) loading.value = false
   }
 }
 
-onMounted(fetchReport)
+async function retryEvaluation() {
+  if (retrying.value) return
+  const version = requestVersion
+  const sessionId = String(route.params.sessionId)
+  retrying.value = true
+  try {
+    await interviewApi.retryEvaluation(sessionId)
+    if (version === requestVersion) await fetchReport(sessionId, version)
+  } catch (e: any) {
+    if (version !== requestVersion) return
+    if (e?.response?.status === 409) await fetchReport(sessionId, version)
+    else error.value = e?.response?.data?.message || e?.message || '重新评估失败，请重试'
+  } finally {
+    if (version === requestVersion) retrying.value = false
+  }
+}
+
+watch(() => route.params.sessionId, (id) => {
+  if (pollTimer) clearTimeout(pollTimer)
+  const version = ++requestVersion
+  report.value = null
+  error.value = ''
+  retrying.value = false
+  fetchReport(String(id), version)
+}, { immediate: true })
+
+onBeforeUnmount(() => {
+  requestVersion++
+  if (pollTimer) clearTimeout(pollTimer)
+})
 
 function scoreColor(s: number) {
   return s >= 80 ? 'var(--green)' : s >= 60 ? 'var(--amber)' : 'var(--red)'
@@ -58,6 +99,8 @@ function back() { router.push('/interview') }
   <!-- error -->
   <div v-else-if="error" class="loading">
     <p style="color:var(--red)">{{ error }}</p>
+    <button v-if="canRetryEvaluation" class="btn btn-accent" :disabled="retrying" @click="retryEvaluation">{{ retrying ? '正在提交…' : '重新评估' }}</button>
+    <button v-else class="btn" @click="fetchReport(String(route.params.sessionId), requestVersion)">重试加载</button>
     <button class="btn" @click="back" style="margin-top:12px">返回</button>
   </div>
 
@@ -158,16 +201,16 @@ function back() { router.push('/interview') }
 
 .btn { background:transparent; color:var(--text); border:1px solid var(--border); padding:8px 20px; border-radius:10px; cursor:pointer; font-size:13px; font-family:var(--font); transition:all .15s; white-space:nowrap; }
 .btn:hover { border-color:var(--accent); color:var(--accent); }
-.btn-accent { background:var(--accent); color:#000; border-color:var(--accent); font-weight:600; }
-.btn-accent:hover { background:var(--accent-dim); border-color:var(--accent-dim); color:#fff; }
+.btn-accent { background:var(--accent); color:var(--on-accent); border-color:var(--accent); font-weight:600; }
+.btn-accent:hover { background:var(--accent-dim); border-color:var(--accent-dim); color:var(--on-accent); }
 
-.rpt { max-width:min(100% - 40px, 900px); margin:0 auto; }
+.rpt { max-width:900px; margin:0 auto; }
 
 /* ── header ── */
 .rpt-hdr { display:flex; align-items:center; gap:24px; margin-bottom:28px; }
 .rpt-ring { position:relative; width:86px; height:86px; flex-shrink:0; }
 .rpt-svg { width:100%; height:100%; transform:rotate(-90deg); }
-.rpt-track { fill:none; stroke:rgba(255,255,255,0.05); stroke-width:6; }
+.rpt-track { fill:none; stroke:var(--control-track); stroke-width:6; }
 .rpt-arc { fill:none; stroke-width:6; stroke-linecap:round; transition:stroke-dasharray .7s ease-out; }
 .rpt-num { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:22px; font-weight:800; font-family:var(--font-display); }
 .rpt-ttl { font-family:var(--font-display); font-size:22px; font-weight:800; margin-bottom:2px; }
@@ -188,7 +231,7 @@ function back() { router.push('/interview') }
 .cr { display:flex; align-items:center; gap:10px; margin-bottom:9px; }
 .cr:last-child { margin-bottom:0; }
 .cr-lbl { width:100px; font-size:13px; flex-shrink:0; }
-.cr-bar { flex:1; height:5px; background:rgba(255,255,255,0.04); border-radius:3px; overflow:hidden; }
+.cr-bar { flex:1; height:5px; background:var(--control-track); border-radius:3px; overflow:hidden; }
 .cr-fill { height:100%; border-radius:3px; transition:width .6s cubic-bezier(.22,1,.36,1); }
 .cr-sc { width:28px; font-size:13px; font-weight:700; text-align:right; font-family:var(--font-display); }
 .cr-cnt { font-size:11px; color:var(--text-dim); width:32px; text-align:right; }
@@ -208,4 +251,11 @@ function back() { router.push('/interview') }
 .qd-ref { font-size:13px; color:var(--green); line-height:1.7; margin-top:8px; padding:8px 12px; background:rgba(52,211,153,0.04); border-radius:8px; border-left:2px solid var(--green); }
 .qd-kp { display:flex; flex-wrap:wrap; gap:4px; margin-top:8px; }
 .qd-kp-tag { font-size:11px; background:rgba(255,255,255,0.04); border:1px solid var(--border); padding:2px 10px; border-radius:6px; color:var(--text-mut); }
+@media (max-width: 768px) {
+  .rpt-grid-2 { grid-template-columns: minmax(0, 1fr); }
+  .rpt-hdr { flex-wrap: wrap; gap: 14px; }
+  .sec { padding: 16px; overflow-wrap: anywhere; }
+  .cr { flex-wrap: wrap; gap: 6px; }
+  .cr-lbl { width: 80px; }
+}
 </style>

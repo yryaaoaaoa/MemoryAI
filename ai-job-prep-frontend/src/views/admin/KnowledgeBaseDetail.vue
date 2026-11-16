@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onBeforeUnmount, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessageBox, ElMessage } from 'element-plus'
-import type { UploadFile } from 'element-plus'
+import type { UploadFile, UploadUserFile } from 'element-plus'
 import { useKnowledgeBaseStore } from '@/stores/knowledge-base.store'
 import { documentApi } from '@/api/document.api'
 import type { Document, DocumentChunk } from '@/types'
@@ -14,12 +14,50 @@ const store = useKnowledgeBaseStore()
 const uploadDialogVisible = ref(false)
 const uploading = ref(false)
 const uploadProgress = ref(0)
-const selectedFile = ref<File | null>(null)
+const uploadFiles = ref<UploadUserFile[]>([])
+const selectedFile = computed(() => uploadFiles.value[0]?.raw ?? null)
+const page = ref(1)
+const size = ref(10)
+const documentsError = ref(false)
+let mounted = true
+let documentLoadVersion = 0
+
+async function loadDocuments() {
+  const version = ++documentLoadVersion
+  const kbId = props.id
+  documentsError.value = false
+  try {
+    const accepted = await store.fetchDocuments(kbId, page.value, size.value)
+    if (mounted && version === documentLoadVersion && props.id === kbId && accepted && page.value > 1 && !store.documents.length && store.documentsTotal > 0) {
+      page.value = Math.ceil(store.documentsTotal / size.value)
+      await store.fetchDocuments(kbId, page.value, size.value)
+    }
+  } catch {
+    if (mounted && version === documentLoadVersion && props.id === kbId) documentsError.value = true
+  }
+}
+
+function changePage(value: number) {
+  page.value = value
+  void loadDocuments()
+}
+
+function changeSize(value: number) {
+  size.value = value
+  page.value = 1
+  void loadDocuments()
+}
+
+async function refreshKB() {
+  try { await store.fetchKBById(props.id) } catch { /* interceptor reports the error */ }
+}
 
 const chunksDialogVisible = ref(false)
 const chunksLoading = ref(false)
 const currentDocChunks = ref<DocumentChunk[]>([])
 const currentDocTitle = ref('')
+let chunksRequest = 0
+watch(chunksDialogVisible, visible => { if (!visible) ++chunksRequest })
 
 function goBack() {
   router.push('/admin/knowledge-bases')
@@ -42,32 +80,45 @@ const statusMap: Record<string, { label: string; type: string }> = {
 
 // --- Upload ---
 function openUpload() {
-  selectedFile.value = null
+  uploadFiles.value = []
   uploadProgress.value = 0
   uploadDialogVisible.value = true
 }
 
-function onFileSelect(file: File) {
+function onFileSelect(upload: UploadFile) {
+  const file = upload.raw
+  if (!file) return
   const ext = file.name.split('.').pop()?.toLowerCase()
   if (!ext || !['pdf', 'md', 'markdown'].includes(ext)) {
     ElMessage.warning('仅支持 PDF 和 Markdown 文件')
-    return false
+    uploadFiles.value = []
+    return
   }
-  selectedFile.value = file
-  return true
+  uploadFiles.value = [upload]
 }
 
+function clearUpload() {
+  uploadFiles.value = []
+  uploadProgress.value = 0
+}
+
+watch(uploadDialogVisible, (visible) => { if (!visible) clearUpload() })
+
 async function handleUpload() {
-  if (!selectedFile.value) return
+  if (!selectedFile.value || uploading.value || !store.currentKB) return
+  const kbId = props.id
+  const file = selectedFile.value
   uploading.value = true
   uploadProgress.value = 0
   try {
-    await documentApi.upload(props.id, selectedFile.value, (p) => {
+    await documentApi.upload(kbId, file, (p) => {
       uploadProgress.value = p
     })
+    if (!mounted || props.id !== kbId) return
     ElMessage.success('上传成功，后台正在处理')
     uploadDialogVisible.value = false
-    store.fetchDocuments(props.id)
+    page.value = 1
+    await Promise.all([loadDocuments(), refreshKB()])
   } catch {
     // error toast by interceptor
   } finally {
@@ -77,29 +128,38 @@ async function handleUpload() {
 
 // --- Chunks ---
 async function handleViewChunks(doc: Document) {
+  const request = ++chunksRequest
+  currentDocChunks.value = []
   currentDocTitle.value = doc.fileName
   chunksLoading.value = true
   chunksDialogVisible.value = true
   try {
-    currentDocChunks.value = await documentApi.getChunks(doc.id)
+    const chunks = await documentApi.getChunks(doc.id)
+    if (request !== chunksRequest || !mounted) return
+    currentDocChunks.value = chunks
   } catch {
-    currentDocChunks.value = []
+    if (request === chunksRequest) currentDocChunks.value = []
   } finally {
-    chunksLoading.value = false
+    if (request === chunksRequest) chunksLoading.value = false
   }
 }
 
 // --- Delete ---
 async function handleDeleteDoc(doc: Document) {
+  const kbId = props.id
+  if (store.documentsLoading || String(doc.kbId) !== String(kbId)) return
   try {
     await ElMessageBox.confirm(
       `确定要删除文档「${doc.fileName}」吗？关联的切片和向量数据将被一并清除。`,
       '删除确认',
       { confirmButtonText: '确认删除', cancelButtonText: '取消', type: 'warning' },
     )
+    if (!mounted || props.id !== kbId || !store.documents.some(item => item.id === doc.id)) return
     await documentApi.delete(doc.id)
     ElMessage.success('文档已删除')
-    store.fetchDocuments(props.id)
+    if (!mounted || props.id !== kbId) return
+    if (store.documents.length === 1 && page.value > 1) page.value--
+    await Promise.all([loadDocuments(), refreshKB()])
   } catch {
     // cancelled
   }
@@ -134,28 +194,8 @@ async function pollProcessingStatus() {
 
   pollingRequesting = true
   try {
-    const results = await Promise.allSettled(
-      processingDocs.map((d) => documentApi.getStatus(d.id)),
-    )
-    let changed = false
-    for (let i = 0; i < results.length; i++) {
-      const r = results[i]
-      if (r.status === 'fulfilled') {
-        const updated = r.value
-        const idx = store.documents.findIndex((d) => d.id === updated.id)
-        if (idx !== -1) {
-          const prev = store.documents[idx].status
-          if (prev !== updated.status) {
-            store.documents[idx] = updated
-            changed = true
-          }
-        }
-      }
-    }
-    if (changed) {
-      // trigger reactivity by replacing the ref
-      store.documents = [...store.documents] as typeof store.documents
-    }
+    const changed = await store.pollDocumentStatus(processingDocs.map(doc => doc.id))
+    if (changed && mounted) await refreshKB()
     // stop if nothing is processing anymore
     if (!hasProcessingDocs()) {
       stopPolling()
@@ -168,8 +208,8 @@ async function pollProcessingStatus() {
 function startPolling() {
   if (pollTimer) return
   // kick off an immediate check, then poll every 3s
-  pollProcessingStatus()
   pollTimer = setInterval(pollProcessingStatus, 3000)
+  void pollProcessingStatus()
 }
 
 function stopPolling() {
@@ -180,20 +220,24 @@ function stopPolling() {
   pollingRequesting = false
 }
 
-onMounted(() => {
-  store.fetchKBById(props.id)
-  store.fetchDocuments(props.id)
-})
-
 onBeforeUnmount(() => {
+  chunksRequest++
+  mounted = false
   stopPolling()
+  store.clearDetail()
 })
 
-watch(() => props.id, (newId) => {
+watch(() => props.id, () => {
+  chunksRequest++
   stopPolling()
-  store.fetchKBById(newId)
-  store.fetchDocuments(newId)
-})
+  store.clearDetail()
+  page.value = 1
+  uploadDialogVisible.value = false
+  chunksDialogVisible.value = false
+  currentDocChunks.value = []
+  void refreshKB()
+  void loadDocuments()
+}, { immediate: true })
 
 watch(() => store.documents, (docs) => {
   if (docs.some((d) => (PROCESSING_STATUSES as readonly string[]).includes(d.status))) {
@@ -211,11 +255,11 @@ watch(() => store.documents, (docs) => {
         <el-icon><ArrowLeft /></el-icon>
         返回
       </el-button>
-      <h2>{{ store.currentKB?.name ?? '加载中...' }}</h2>
+      <h2>{{ store.currentKB?.name ?? (store.kbLoading ? '加载中...' : '知识库不可用') }}</h2>
       <el-tag v-if="store.currentKB" type="info" effect="plain" class="kb-stats">
         {{ store.currentKB.documentCount }} 文档 / {{ store.currentKB.chunkCount }} 切片
       </el-tag>
-      <el-button type="primary" @click="openUpload">
+      <el-button type="primary" :disabled="!store.currentKB || store.kbLoading" @click="openUpload">
         <el-icon><Upload /></el-icon>
         上传文档
       </el-button>
@@ -223,7 +267,8 @@ watch(() => store.documents, (docs) => {
 
     <p v-if="store.currentKB?.description" class="kb-desc">{{ store.currentKB.description }}</p>
 
-    <el-table :data="store.documents" v-loading="store.loading" stripe>
+    <p v-if="documentsError" role="alert">文档加载失败。<el-button text @click="loadDocuments">重新加载</el-button></p>
+    <el-table :data="store.documents" v-loading="store.documentsLoading" stripe>
       <el-table-column prop="fileName" label="文件名" min-width="200" />
       <el-table-column prop="fileType" label="类型" width="70" />
       <el-table-column label="大小" width="100">
@@ -252,15 +297,24 @@ watch(() => store.documents, (docs) => {
       </el-table-column>
     </el-table>
 
+    <el-pagination v-if="store.documentsTotal > 0" class="pagination"
+      :current-page="page" :page-size="size" :total="store.documentsTotal"
+      :page-sizes="[10, 20, 50]" :disabled="store.documentsLoading"
+      layout="total, sizes, prev, pager, next" @current-change="changePage" @size-change="changeSize" />
+
     <!-- Upload Dialog -->
-    <el-dialog v-model="uploadDialogVisible" title="上传文档" width="480px" destroy-on-close>
+    <el-dialog v-model="uploadDialogVisible" title="上传文档" width="480px" destroy-on-close
+      :show-close="!uploading" :close-on-click-modal="!uploading" :close-on-press-escape="!uploading">
       <el-upload
         drag
         :auto-upload="false"
         :show-file-list="true"
+        v-model:file-list="uploadFiles"
+        :disabled="uploading"
         :limit="1"
         accept=".pdf,.md,.markdown"
-        :on-change="(u: UploadFile) => u.raw && onFileSelect(u.raw)"
+        :on-change="onFileSelect"
+        :on-remove="clearUpload"
         :on-exceed="() => ElMessage.warning('每次只能上传一个文件')"
       >
         <el-icon class="upload-icon" :size="48"><UploadFilled /></el-icon>
@@ -270,7 +324,7 @@ watch(() => store.documents, (docs) => {
         </template>
       </el-upload>
       <template #footer>
-        <el-button @click="uploadDialogVisible = false">取消</el-button>
+        <el-button :disabled="uploading" @click="uploadDialogVisible = false">取消</el-button>
         <el-button
           type="primary"
           :loading="uploading"
@@ -301,6 +355,7 @@ watch(() => store.documents, (docs) => {
 </template>
 
 <style scoped>
+.pagination { margin-top: 20px; justify-content: flex-end; }
 .admin-detail {
   max-width: 1000px;
   margin: 0 auto;
@@ -322,7 +377,7 @@ watch(() => store.documents, (docs) => {
 }
 
 .kb-desc {
-  color: #909399;
+  color: var(--text-dim);
   margin-bottom: 16px;
   padding-left: 4px;
 }
@@ -332,22 +387,22 @@ watch(() => store.documents, (docs) => {
 }
 
 .upload-text {
-  color: #606266;
+  color: var(--text-mut);
   font-size: 14px;
 }
 
 .upload-tip {
-  color: #909399;
+  color: var(--text-dim);
   font-size: 12px;
   margin-top: 8px;
 }
 
 .chunk-card {
-  border: 1px solid #e4e7ed;
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 12px;
   margin-bottom: 12px;
-  background: #fafafa;
+  background: var(--bg-glass);
 }
 
 .chunk-header {
@@ -360,7 +415,7 @@ watch(() => store.documents, (docs) => {
 .chunk-index {
   font-weight: 600;
   font-size: 13px;
-  color: #409eff;
+  color: var(--accent);
 }
 
 .chunk-content {
@@ -369,6 +424,6 @@ watch(() => store.documents, (docs) => {
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
-  color: #303133;
+  color: var(--text);
 }
 </style>

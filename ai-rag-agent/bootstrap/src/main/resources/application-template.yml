@@ -1,0 +1,108 @@
+# Copy to an external configuration file and supply environment variables.
+server:
+  port: 8080
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+    session:
+      cookie:
+        name: MEMORAISESSION
+        http-only: true
+        secure: false
+        same-site: lax
+        path: /
+        max-age: 1800
+spring:
+  application:
+    name: jobai
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 60MB
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USER}
+    password: ${DB_PASS}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: 6379
+      timeout: 5000
+      password: ${REDIS_PASS}
+  session:
+    store-type: redis
+    redis:
+      namespace: spring:session:jobai
+      flush-mode: on_save
+    timeout: 1800
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: isDelete
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+jobai:
+  rag:
+    enabled: ${RAG_ENABLED:false}
+  elasticsearch:
+    ca-certificate: ${ES_CA_CERT:}
+    host: ${ES_HOST:localhost}
+    port: 9200
+    scheme: https
+    username: ${ES_USER:elastic}
+    password: ${ES_PASS:}
+  ollama:
+    base-url: http://localhost:11434
+    embedding-model: bge-m3
+  embedding:
+    provider: siliconflow
+  siliconflow:
+    api-key: ${SILICONFLOW_API_KEY:}
+    base-url: https://api.siliconflow.cn/v1
+    model: BAAI/bge-m3
+  splitter:
+    max-chars: 1024
+    overlap-chars: 128
+    strategy: recursive
+    token-estimation: half
+  retrieval:
+    rank-constant: 60
+    num-candidates-factor: 2
+    rank-window-factor: 2
+    bm25-fields: content^3,heading_path
+    short-query-max-len: 4
+    medium-query-max-len: 12
+    short-query:
+      top-k: 20
+      min-score: 0.25
+    medium-query:
+      top-k: 12
+      min-score: 0.28
+    long-query:
+      top-k: 8
+      min-score: 0.28
+    defaults:
+      top-k: 3
+      min-score: 0.2
+  deepseek:
+    api-key: ${DEEPSEEK_API_KEY}
+    base-url: https://api.deepseek.com
+    model: deepseek-v4-flash
+  ocr:
+    paddle:
+      server-url: ${OCR_PADDLE_URL:}
+      access-token: ${OCR_PADDLE_TOKEN:}
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs

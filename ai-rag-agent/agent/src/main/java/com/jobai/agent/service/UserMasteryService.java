@@ -2,23 +2,23 @@ package com.jobai.agent.service;
 
 import com.jobai.agent.model.MasteryEntry;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
+import java.util.Comparator;
 import java.util.List;
 
 /**
  * user_mastery 表查询服务 — 读取长期掌握度数据。
- * 写入由 WrongQuestionService（刷题提交 + 面试评估）完成。
+ * 当前由 WrongQuestionService 的刷题提交更新；面试画像独立保存在 user_skill_profile。
  *
  * <p>读取时自动施加时间衰减：
- * 距上次复习每过 1 天，mastery 衰减 2%，最低保留 50%。
+ * 超过计划复习日期后，每过 1 天，mastery 衰减 2%，最低保留 50%。
  * 衰减不落库，仅影响读取展示和出题优先级。</p>
  */
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class UserMasteryService {
@@ -36,27 +36,24 @@ public class UserMasteryService {
      */
     public List<MasteryEntry> getMasteries(Long userId) {
         if (userId == null) return List.of();
-        try {
-            LocalDate today = LocalDate.now();
-            return jdbc.query(
-                    "SELECT topic, mastery, total_attempts, correct_attempts, next_review_at FROM user_mastery WHERE user_id = ? ORDER BY mastery ASC",
-                    (rs, rowNum) -> {
-                        int rawMastery = rs.getInt("mastery");
-                        java.sql.Date reviewSql = rs.getDate("next_review_at");
-                        LocalDate nextReview = reviewSql != null ? reviewSql.toLocalDate() : null;
-                        int decayed = applyDecay(rawMastery, nextReview, today);
-                        return new MasteryEntry(
-                                rs.getString("topic"),
-                                decayed,
-                                rs.getInt("total_attempts"),
-                                rs.getInt("correct_attempts"),
-                                nextReview);
-                    },
-                    userId);
-        } catch (Exception e) {
-            log.warn("Failed to query mastery for userId={}: {}", userId, e.getMessage());
-            return List.of();
-        }
+        LocalDate today = LocalDate.now();
+        return jdbc.query(
+                "SELECT topic, mastery, total_attempts, correct_attempts, next_review_at FROM user_mastery WHERE user_id = ?",
+                (rs, rowNum) -> {
+                    int rawMastery = rs.getInt("mastery");
+                    java.sql.Date reviewSql = rs.getDate("next_review_at");
+                    LocalDate nextReview = reviewSql != null ? reviewSql.toLocalDate() : null;
+                    int decayed = applyDecay(rawMastery, nextReview, today);
+                    return new MasteryEntry(
+                            rs.getString("topic"),
+                            decayed,
+                            rs.getInt("total_attempts"),
+                            rs.getInt("correct_attempts"),
+                            nextReview);
+                },
+                userId).stream()
+                .sorted(Comparator.comparingInt(MasteryEntry::mastery).thenComparing(MasteryEntry::topic))
+                .toList();
     }
 
     /**
@@ -93,56 +90,42 @@ public class UserMasteryService {
      * 获取总答题数。
      */
     public int getTotalQuizzes(Long userId) {
-        try {
-            Integer val = jdbc.queryForObject(
-                    "SELECT COUNT(*) FROM quiz_record WHERE user_id = ?", Integer.class, userId);
-            return val != null ? val : 0;
-        } catch (Exception e) {
-            return 0;
-        }
+        Integer val = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM quiz_record WHERE user_id = ?", Integer.class, userId);
+        return val != null ? val : 0;
     }
 
     /**
      * 获取正确率（0-100）。
      */
     public int getCorrectRate(Long userId) {
-        try {
-            Integer total = jdbc.queryForObject(
-                    "SELECT COUNT(*) FROM quiz_record WHERE user_id = ?", Integer.class, userId);
-            Integer correct = jdbc.queryForObject(
-                    "SELECT COUNT(*) FROM quiz_record WHERE user_id = ? AND is_correct = 1", Integer.class, userId);
-            if (total == null || total == 0) return 0;
-            return (int) Math.round(correct * 100.0 / total);
-        } catch (Exception e) {
-            return 0;
-        }
+        Integer val = jdbc.queryForObject(
+                "SELECT COALESCE(ROUND(AVG(is_correct) * 100), 0) FROM quiz_record WHERE user_id = ?",
+                Integer.class, userId);
+        return val != null ? val : 0;
     }
 
     /**
      * 获取最长连续正确次数。
      */
     public int getMaxStreak(Long userId) {
-        try {
-            Integer val = jdbc.queryForObject(
-                    "SELECT COALESCE(MAX(streak), 0) FROM user_mastery WHERE user_id = ?",
-                    Integer.class, userId);
-            return val != null ? val : 0;
-        } catch (Exception e) {
-            return 0;
-        }
+        // A topic's current streak is not the user's historical best across all quizzes.
+        int[] currentAndMax = {0, 0};
+        jdbc.query("SELECT is_correct FROM quiz_record WHERE user_id = ? ORDER BY id",
+                (RowCallbackHandler) rs -> {
+                    currentAndMax[0] = rs.getInt("is_correct") == 1 ? currentAndMax[0] + 1 : 0;
+                    currentAndMax[1] = Math.max(currentAndMax[1], currentAndMax[0]);
+                }, userId);
+        return currentAndMax[1];
     }
 
     /**
      * 获取技术栈（从已答题的 topic 去重提取）。
      */
     public List<String> getTechStack(Long userId) {
-        try {
-            return jdbc.query(
-                    "SELECT DISTINCT topic FROM user_mastery WHERE user_id = ? AND total_attempts > 0 ORDER BY topic",
-                    (rs, rowNum) -> rs.getString("topic"),
-                    userId);
-        } catch (Exception e) {
-            return List.of();
-        }
+        return jdbc.query(
+                "SELECT DISTINCT topic FROM user_mastery WHERE user_id = ? AND total_attempts > 0 ORDER BY topic",
+                (rs, rowNum) -> rs.getString("topic"),
+                userId);
     }
 }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useFeaturesStore } from '@/stores/features.store'
 import { knowledgeBaseApi } from '@/api/knowledge-base.api'
 import { quizApi } from '@/api/quiz.api'
 import type { KnowledgeBase } from '@/types/knowledge-base'
@@ -25,9 +26,13 @@ interface QuizResult {
 type PageState = 'selection' | 'quiz' | 'results'
 const pageState = ref<PageState>('selection')
 
+const features = useFeaturesStore()
+const canGenerate = computed(() => selectedKbIds.value.size > 0 || !!topic.value.trim())
+
 // KB list
 const kbList = ref<KnowledgeBase[]>([])
 const loading = ref(false)
+const generationError = ref('')
 const selectedKbIds = ref<Set<number>>(new Set())
 
 // Config
@@ -40,8 +45,18 @@ const questions = ref<QuizQuestion[]>([])
 const currentIndex = ref(0)
 const userAnswers = ref<Record<number, string>>({})
 const quizResults = ref<Record<number, QuizResult>>({})
+const submitting = ref(false)
+const submissionStarted = ref(false)
+const submissionErrors = ref<Record<number, string>>({})
+const uncertainSubmissions = new Set<number>()
+const previouslySubmittedIds = new Set<number>()
+const submissionMessage = computed(() => Object.entries(submissionErrors.value)
+  .map(([index, message]) => `第 ${Number(index) + 1} 题：${message}`).join('；'))
 const timer = ref(0)
+const questionDurations = ref<Record<number, number>>({})
 let timerInterval: ReturnType<typeof setInterval> | null = null
+let disposed = false
+onBeforeUnmount(() => { disposed = true; if (timerInterval) clearInterval(timerInterval) })
 
 // Stats
 const correctCount = computed(() => Object.values(quizResults.value).filter(r => r.correct).length)
@@ -51,9 +66,16 @@ const labels = ['A', 'B', 'C', 'D']
 
 // ========== Load KBs ==========
 onMounted(async () => {
+  if (!features.ragEnabled) return
   try {
-    const res = await knowledgeBaseApi.list()
-    kbList.value = (res as any).records ?? (res as any).data?.records ?? []
+    const all: KnowledgeBase[] = []
+    for (let page = 1; ; page++) {
+      const res = await knowledgeBaseApi.list({ page, size: 100 })
+      if (disposed) return
+      all.push(...res.records)
+      if (all.length >= res.total || res.records.length === 0) break
+    }
+    kbList.value = all
   } catch {
     ElMessage.warning('加载知识库失败')
   }
@@ -69,30 +91,38 @@ function toggleKb(id: number) {
 
 // ========== Start Quiz ==========
 async function startQuiz() {
-  if (selectedKbIds.value.size === 0) return
+  if (loading.value || !canGenerate.value) return
 
   loading.value = true
+  generationError.value = ''
   userAnswers.value = {}
   quizResults.value = {}
+  submissionStarted.value = false
+  submissionErrors.value = {}
+  uncertainSubmissions.clear()
+  previouslySubmittedIds.clear()
   currentIndex.value = 0
   timer.value = 0
+  questionDurations.value = {}
 
   try {
     const res = await quizApi.generateQuiz(
       Array.from(selectedKbIds.value),
       questionCount.value,
       difficulty.value,
-      topic.value || undefined
+      topic.value.trim() || undefined
     )
+    if (disposed) return
     questions.value = res as any as QuizQuestion[]
     if (questions.value.length === 0) {
-      ElMessage.warning('出题失败，请重试')
+      generationError.value = '未生成题目，请调整出题方向或知识库后重试'
       return
     }
     pageState.value = 'quiz'
     startTimer()
-  } catch {
-    ElMessage.error('出题失败，请稍后重试')
+  } catch (error: any) {
+    // The request interceptor already displays the specific server error once.
+    generationError.value = error?.response?.data?.message || error?.message || '出题失败，请稍后重试'
   } finally {
     loading.value = false
   }
@@ -100,7 +130,11 @@ async function startQuiz() {
 
 function startTimer() {
   if (timerInterval) clearInterval(timerInterval)
-  timerInterval = setInterval(() => timer.value++, 1000)
+  timerInterval = setInterval(() => {
+    if (activeTab.value !== 'quiz') return
+    timer.value++
+    questionDurations.value[currentIndex.value] = (questionDurations.value[currentIndex.value] ?? 0) + 1
+  }, 1000)
 }
 
 function formatTime(s: number): string {
@@ -111,6 +145,7 @@ function formatTime(s: number): string {
 
 // ========== Quiz ==========
 function selectAnswer(label: string) {
+  if (submitting.value || submissionStarted.value) return
   userAnswers.value[currentIndex.value] = label
 }
 
@@ -122,65 +157,93 @@ function nextQuestion() {
 }
 
 async function submitQuiz() {
-  const unanswered = questions.value.length - totalAnswered.value
-  if (unanswered > 0) {
-    try {
-      await ElMessageBox.confirm(
-        `还有 ${unanswered} 题未作答，确认交卷吗？`,
-        '交卷确认',
-        { confirmButtonText: '确认', cancelButtonText: '继续答题', type: 'warning' }
-      )
-    } catch { return }
-  }
-
-  if (timerInterval) clearInterval(timerInterval)
-
-  // Submit each answered question
-  for (let i = 0; i < questions.value.length; i++) {
-    const ans = userAnswers.value[i]
-    const q = questions.value[i]
-    if (!ans || !q.id) {
-      quizResults.value[i] = {
-        correct: false,
-        score: 0,
-        correctAnswer: q.answer,
-        explanation: q.explanation,
-      }
-      continue
+  if (submitting.value) return
+  submitting.value = true
+  try {
+    const unanswered = questions.value.length - totalAnswered.value
+    if (!submissionStarted.value && unanswered > 0) {
+      try {
+        await ElMessageBox.confirm(
+          `还有 ${unanswered} 题未作答，确认交卷吗？`, '交卷确认',
+          { confirmButtonText: '确认', cancelButtonText: '继续答题', type: 'warning' }
+        )
+      } catch { return }
     }
-    try {
-      const res = await quizApi.submitAnswer(q.id, ans, 0)
-      quizResults.value[i] = res as any as QuizResult
-    } catch {
-      // Fallback: local compare
-      quizResults.value[i] = {
-        correct: ans === q.answer,
-        score: ans === q.answer ? 100 : 0,
-        correctAnswer: q.answer,
-        explanation: q.explanation,
+    submissionStarted.value = true
+    if (timerInterval) clearInterval(timerInterval)
+
+    for (let i = 0; i < questions.value.length; i++) {
+      if (disposed) return
+      if (quizResults.value[i]) continue // Never resubmit server-confirmed answers.
+      const q = questions.value[i]
+      if (!q?.id) {
+        submissionErrors.value[i] = '题目缺少保存标识，请重新出题'
+        continue
+      }
+      if (uncertainSubmissions.has(i)) {
+        if (previouslySubmittedIds.has(q.id)) {
+          submissionErrors.value[i] = '提交结果未确认，请查看答题记录'
+          continue
+        }
+        // Freshly generated question IDs have no earlier attempt to confuse with this submission.
+        try {
+          const statuses = await quizApi.batchStatus([q.id])
+          const saved = statuses[String(q.id)]
+          if (saved) {
+            quizResults.value[i] = saved
+            delete submissionErrors.value[i]
+            uncertainSubmissions.delete(i)
+            continue
+          }
+          uncertainSubmissions.delete(i)
+        } catch {
+          submissionErrors.value[i] = '无法确认保存状态，请恢复网络后重试'
+          continue
+        }
+      }
+      try {
+        quizResults.value[i] = await quizApi.submitAnswer(q.id, userAnswers.value[i] ?? '', questionDurations.value[i] ?? 0)
+        delete submissionErrors.value[i]
+      } catch (error: any) {
+        if (!error?.response) {
+          uncertainSubmissions.add(i)
+          submissionErrors.value[i] = previouslySubmittedIds.has(q.id)
+            ? '提交结果未确认，请查看答题记录'
+            : '提交结果未确认，重试时将先核对保存状态'
+        } else {
+          submissionErrors.value[i] = '保存失败，请重试未保存题目'
+        }
       }
     }
+    if (Object.keys(quizResults.value).length === questions.value.length) {
+      pageState.value = 'results'
+    } else {
+      ElMessage.warning('部分题目尚未确认保存，答案已保留')
+    }
+  } finally {
+    submitting.value = false
   }
-
-  pageState.value = 'results'
 }
 
 function retryWrong() {
-  const wrong = questions.value.filter((q, i) => {
-    const ans = userAnswers.value[i]
-    return ans !== q.answer
-  })
+  const wrong = questions.value.filter((_, i) => quizResults.value[i]?.correct === false)
   if (wrong.length === 0) return
   questions.value = wrong
+  for (const q of wrong) if (q.id) previouslySubmittedIds.add(q.id)
   userAnswers.value = {}
   quizResults.value = {}
+  submissionStarted.value = false
+  submissionErrors.value = {}
+  uncertainSubmissions.clear()
   currentIndex.value = 0
   timer.value = 0
+  questionDurations.value = {}
   pageState.value = 'quiz'
   startTimer()
 }
 
 function backToSelection() {
+  if (submitting.value) return
   if (timerInterval) clearInterval(timerInterval)
   selectedKbIds.value = new Set()
   pageState.value = 'selection'
@@ -190,6 +253,8 @@ function backToSelection() {
 const activeTab = ref<'quiz' | 'history'>('quiz')
 const records = ref<QuizRecordVO[]>([])
 const recordLoading = ref(false)
+const recordError = ref('')
+let recordRequest = 0
 const recordPage = ref(1)
 const recordPageSize = ref(10)
 const recordTotal = ref(0)
@@ -199,7 +264,7 @@ const filterCorrect = ref('')
 const filterDateFrom = ref('')
 const filterDateTo = ref('')
 const expandedRecord = ref<number | null>(null)
-const wrongTopics = ref<{ topic: string; count: number }[]>([])
+const recordTopics = ref<string[]>([])
 
 function onFilterChange() {
   recordPage.value = 1
@@ -207,7 +272,10 @@ function onFilterChange() {
 }
 
 async function fetchRecords() {
+  const requestId = ++recordRequest
   recordLoading.value = true
+  recordError.value = ''
+  expandedRecord.value = null
   try {
     const params: Record<string, any> = { page: recordPage.value, size: recordPageSize.value }
     if (filterTopic.value) params.topic = filterTopic.value
@@ -215,29 +283,33 @@ async function fetchRecords() {
     if (filterDateFrom.value) params.dateFrom = filterDateFrom.value
     if (filterDateTo.value) params.dateTo = filterDateTo.value
     const res = await quizApi.listRecords(params)
+    if (requestId !== recordRequest || disposed) return
     const data = res as unknown as QuizRecordPage
     records.value = data.records
     recordTotal.value = data.total
     recordTotalPages.value = data.totalPages
   } catch {
-    ElMessage.error('加载记录失败')
+    if (requestId !== recordRequest || disposed) return
+    recordError.value = '加载答题记录失败，请重试'
     records.value = []
+    recordTotal.value = 0
+    recordTotalPages.value = 0
   } finally {
-    recordLoading.value = false
+    if (requestId === recordRequest) recordLoading.value = false
   }
 }
 
-async function fetchWrongTopics() {
+async function fetchRecordTopics() {
   try {
-    const res = await quizApi.listWrongTopics()
-    wrongTopics.value = res as { topic: string; count: number }[]
+    recordTopics.value = await quizApi.listRecordTopics()
   } catch { /* ignore */ }
 }
 
 function switchTab(tab: 'quiz' | 'history') {
+  if (submitting.value) return
   activeTab.value = tab
   if (tab === 'history') {
-    fetchWrongTopics()
+    fetchRecordTopics()
     fetchRecords()
   }
 }
@@ -278,35 +350,36 @@ function formatDate(d: string): string {
     <!-- Header -->
     <div class="qp-hd">
       <div class="qp-tabs">
-        <button :class="['qp-tab', { active: activeTab === 'quiz' }]" @click="switchTab('quiz')">刷题</button>
-        <button :class="['qp-tab', { active: activeTab === 'history' }]" @click="switchTab('history')">记录</button>
+        <button :disabled="submitting" :class="['qp-tab', { active: activeTab === 'quiz' }]" @click="switchTab('quiz')">刷题</button>
+        <button :disabled="submitting" :class="['qp-tab', { active: activeTab === 'history' }]" @click="switchTab('history')">记录</button>
       </div>
     </div>
 
     <!-- ====== STATE: SELECTION ====== -->
     <template v-if="activeTab === 'quiz' && pageState === 'selection'">
       <div class="qp-body">
-        <div class="sel-layout">
+        <div :class="['sel-layout', { 'without-kb': !features.ragEnabled }]">
           <!-- KB Grid -->
-          <div>
+          <div v-if="features.ragEnabled">
             <div class="kb-grid">
-              <div v-for="kb in kbList" :key="kb.id"
-                :class="['kb-card', { selected: selectedKbIds.has(kb.id) }]"
-                @click="toggleKb(kb.id)">
-                <div class="kb-card-top">
-                  <div class="kb-info">
-                    <div class="kb-name">{{ kb.name }}</div>
-                    <div class="kb-desc">{{ kb.description || '' }}</div>
-                  </div>
-                  <div :class="['kb-chk', { on: selectedKbIds.has(kb.id) }]">
-                    <svg v-if="selectedKbIds.has(kb.id)" width="10" height="8" viewBox="0 0 10 8">
-                      <path d="M1 4L3.5 6.5L9 1" stroke="#08080c" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+              <button v-for="kb in kbList" :key="kb.id" type="button"
+                :class="['kb-card', { selected: selectedKbIds.has(Number(kb.id)) }]"
+                :aria-pressed="selectedKbIds.has(Number(kb.id))"
+                @click="toggleKb(Number(kb.id))">
+                <span class="kb-card-top">
+                  <span class="kb-info">
+                    <span class="kb-name">{{ kb.name }}</span>
+                    <span class="kb-desc">{{ kb.description || '' }}</span>
+                  </span>
+                  <span :class="['kb-chk', { on: selectedKbIds.has(Number(kb.id)) }]" aria-hidden="true">
+                    <svg v-if="selectedKbIds.has(Number(kb.id))" width="10" height="8" viewBox="0 0 10 8">
+                      <path d="M1 4L3.5 6.5L9 1" stroke="var(--on-accent)" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
-                  </div>
-                </div>
-              </div>
+                  </span>
+                </span>
+              </button>
             </div>
-            <p class="sel-count" v-if="selectedKbIds.size === 0">选择知识库开始刷题</p>
+            <p class="sel-count" v-if="selectedKbIds.size === 0">选择参考知识库，或填写出题方向</p>
             <p class="sel-count" v-else>已选 {{ selectedKbIds.size }} 个知识库 · {{ questionCount }} 题</p>
           </div>
 
@@ -325,13 +398,14 @@ function formatDate(d: string): string {
             </div>
 
             <div class="cfg-grp">
-              <div class="cfg-lbl">题目数量 <span class="cfg-val">{{ questionCount }}</span></div>
-              <input type="range" min="5" max="20" v-model.number="questionCount" class="range" />
+              <label for="quiz-count" class="cfg-lbl">题目数量 <span class="cfg-val">{{ questionCount }}</span></label>
+              <input id="quiz-count" type="range" min="5" max="20" v-model.number="questionCount" class="range" />
             </div>
 
             <div class="cfg-grp">
-              <div class="cfg-lbl">出题方向</div>
+              <label for="quiz-topic" class="cfg-lbl">{{ selectedKbIds.size ? '出题方向（选填）' : '出题方向' }}</label>
               <input
+                id="quiz-topic"
                 v-model="topic"
                 type="text"
                 class="topic-input"
@@ -339,16 +413,17 @@ function formatDate(d: string): string {
               />
             </div>
 
-            <button class="btn-start" :disabled="selectedKbIds.size === 0 || loading" @click="startQuiz">
+            <button class="btn-start" :disabled="!canGenerate || loading" @click="startQuiz">
               {{ loading ? '出题中...' : '开始刷题' }}
               <span class="btn-start-hint" v-if="!loading">{{
-                selectedKbIds.size === 0
-                  ? '至少选择一个知识库'
+                !canGenerate
+                  ? '请填写出题方向'
                   : topic.trim()
                     ? `出题方向：${topic.trim()} · ${questionCount} 题`
-                    : '智能模式 — 按薄弱知识点出题'
+                    : '优先练习薄弱点，无匹配时综合出题'
               }}</span>
             </button>
+            <p v-if="generationError" class="generation-error" role="alert">{{ generationError }}</p>
           </div>
         </div>
       </div>
@@ -372,7 +447,7 @@ function formatDate(d: string): string {
 
             <!-- Header -->
             <div class="quiz-hd">
-              <span class="quiz-topic">Java 求职备考 · {{ difficulty === 'easy' ? '简单' : difficulty === 'hard' ? '困难' : '混合' }}</span>
+              <span class="quiz-topic">{{ selectedKbIds.size ? '知识库练习' : '专项练习' }} · {{ difficulty === 'easy' ? '简单' : difficulty === 'medium' ? '中等' : difficulty === 'hard' ? '困难' : '混合' }}</span>
               <span class="quiz-timer">{{ formatTime(timer) }}</span>
             </div>
 
@@ -382,20 +457,27 @@ function formatDate(d: string): string {
                 <div class="q-num">第 {{ currentIndex + 1 }} 题</div>
                 <div class="q-text">{{ questions[currentIndex]?.question }}</div>
                 <div class="q-opts">
-                  <div v-for="lbl in labels" :key="lbl"
+                  <button v-for="lbl in labels" :key="lbl" type="button"
                     :class="['q-opt', { selected: userAnswers[currentIndex] === lbl }]"
+                    :aria-pressed="userAnswers[currentIndex] === lbl"
+                    :disabled="submitting || submissionStarted"
+                    :aria-disabled="submitting || submissionStarted"
                     @click="selectAnswer(lbl)">
                     <span class="q-opt-lbl">{{ lbl }}</span>
                     <span class="q-opt-txt">{{ questions[currentIndex]?.options?.[lbl] }}</span>
-                  </div>
+                  </button>
                 </div>
                 <div class="q-nav">
                   <div class="q-nav-left">
                     <button class="btn-nav" :disabled="currentIndex === 0" @click="prevQuestion">← 上一题</button>
                     <button class="btn-nav" :disabled="currentIndex === questions.length - 1" @click="nextQuestion">下一题 →</button>
                   </div>
-                  <button class="btn-submit" @click="submitQuiz">交卷</button>
+                   <button class="btn-submit" :disabled="submitting" @click="submitQuiz">{{ submitting ? '提交中...' : submissionStarted ? '重试未保存题目' : '交卷' }}</button>
                 </div>
+                 <div v-if="submissionMessage" role="alert" class="submission-error">
+                   <p>{{ submissionMessage }}</p>
+                   <button class="btn-nav" :disabled="submitting" @click="backToSelection">重新出题</button>
+                 </div>
               </div>
             </transition>
           </div>
@@ -405,9 +487,11 @@ function formatDate(d: string): string {
             <div class="qs-sec">
               <h4>答题情况</h4>
               <div class="palette">
-                <div v-for="(_, i) in questions" :key="i"
+                <button v-for="(_, i) in questions" :key="i" type="button"
                   :class="['p-dot', { current: i === currentIndex, answered: userAnswers[i] }]"
-                  @click="currentIndex = i">{{ i + 1 }}</div>
+                  :aria-label="`第 ${i + 1} 题，${userAnswers[i] ? '已答' : '未答'}`"
+                  :aria-current="i === currentIndex ? 'step' : undefined"
+                  @click="currentIndex = i">{{ i + 1 }}</button>
               </div>
             </div>
             <div class="qs-sec">
@@ -449,7 +533,7 @@ function formatDate(d: string): string {
               </div>
               <div class="rev-q">{{ q.question }}</div>
               <div class="rev-answers">
-                <span class="rev-yours">你的答案：<span>{{ userAnswers[i] }}. {{ q.options[userAnswers[i]] || '' }}</span></span>
+                <span class="rev-yours">你的答案：<span>{{ userAnswers[i] ? `${userAnswers[i]}. ${q.options[userAnswers[i]] || ''}` : '未作答' }}</span></span>
                 <span v-if="!quizResults[i]?.correct" class="rev-correct">正确答案：<span>{{ q.answer }}. {{ q.options[q.answer] }}</span></span>
               </div>
               <div class="rev-exp">{{ q.explanation }}</div>
@@ -459,7 +543,7 @@ function formatDate(d: string): string {
           <!-- Actions -->
           <div class="res-actions">
             <button class="btn-secondary" @click="backToSelection">← 返回选题</button>
-            <button class="btn-primary" @click="retryWrong">重做错题</button>
+            <button v-if="correctCount < questions.length" class="btn-primary" @click="retryWrong">重做错题</button>
           </div>
         </div>
       </div>
@@ -473,10 +557,10 @@ function formatDate(d: string): string {
           <!-- Filter Bar -->
           <div class="history-filters">
             <div class="hf-group">
-              <label class="hf-label">知识点</label>
-              <select v-model="filterTopic" @change="onFilterChange" class="hf-select">
+              <label for="history-topic" class="hf-label">知识点</label>
+              <select id="history-topic" v-model="filterTopic" @change="onFilterChange" class="hf-select">
                 <option value="">全部</option>
-                <option v-for="t in wrongTopics" :key="t.topic" :value="t.topic">{{ t.topic }}</option>
+                <option v-for="t in recordTopics" :key="t" :value="t">{{ t }}</option>
               </select>
             </div>
             <div class="hf-group">
@@ -488,21 +572,28 @@ function formatDate(d: string): string {
               </div>
             </div>
             <div class="hf-group">
-              <label class="hf-label">起始日期</label>
-              <input type="date" v-model="filterDateFrom" @change="onFilterChange" class="hf-date" />
+              <label for="history-from" class="hf-label">起始日期</label>
+              <input id="history-from" type="date" v-model="filterDateFrom" @change="onFilterChange" class="hf-date" />
             </div>
             <div class="hf-group">
-              <label class="hf-label">截止日期</label>
-              <input type="date" v-model="filterDateTo" @change="onFilterChange" class="hf-date" />
+              <label for="history-to" class="hf-label">截止日期</label>
+              <input id="history-to" type="date" v-model="filterDateTo" @change="onFilterChange" class="hf-date" />
             </div>
           </div>
 
           <!-- Record List -->
           <div class="history-list">
             <div v-if="recordLoading" class="hl-status">加载中...</div>
+            <div v-else-if="recordError" class="hl-status" role="alert">
+              <p>{{ recordError }}</p>
+              <button class="btn-nav" @click="fetchRecords">重试加载</button>
+            </div>
             <div v-else-if="records.length === 0" class="hl-status hl-empty">暂无记录</div>
-            <div v-for="r in records" :key="r.id"
+            <div v-for="r in recordLoading || recordError ? [] : records" :key="r.id"
               :class="['hl-item', { expanded: expandedRecord === r.id }]"
+              role="button" tabindex="0" :aria-expanded="expandedRecord === r.id"
+              @keydown.enter.self.prevent="toggleExpand(r.id)"
+              @keydown.space.self.prevent="toggleExpand(r.id)"
               @click="toggleExpand(r.id)">
               <div class="hl-top">
                 <div class="hl-top-left">
@@ -531,7 +622,7 @@ function formatDate(d: string): string {
                     </div>
                   </div>
                   <div class="hl-answers" v-if="r.userAnswer !== r.correctAnswer">
-                    <div class="hl-ans-row wrong">你的答案：{{ r.userAnswer }}. {{ r.options[r.userAnswer] || '' }}</div>
+                    <div class="hl-ans-row wrong">你的答案：{{ r.userAnswer ? `${r.userAnswer}. ${r.options[r.userAnswer] || ''}` : '未作答' }}</div>
                     <div class="hl-ans-row correct">正确答案：{{ r.correctAnswer }}. {{ r.options[r.correctAnswer] }}</div>
                   </div>
                   <div class="hl-explanation">
@@ -544,9 +635,9 @@ function formatDate(d: string): string {
 
           <!-- Pagination -->
           <div class="history-pagination" v-if="recordTotalPages > 1">
-            <button class="hp-btn" :disabled="recordPage <= 1" @click="recordPrevPage">← 上一页</button>
+            <button class="hp-btn" :disabled="recordLoading || recordPage <= 1" @click="recordPrevPage">← 上一页</button>
             <span class="hp-info">{{ recordPage }} / {{ recordTotalPages }} 页（共 {{ recordTotal }} 条）</span>
-            <button class="hp-btn" :disabled="recordPage >= recordTotalPages" @click="recordNextPage">下一页 →</button>
+            <button class="hp-btn" :disabled="recordLoading || recordPage >= recordTotalPages" @click="recordNextPage">下一页 →</button>
           </div>
 
         </div>
@@ -556,8 +647,8 @@ function formatDate(d: string): string {
 </template>
 
 <style scoped>
-.quiz-page { height: 100%; display: flex; flex-direction: column; }
-.qp-body { flex: 1; overflow-y: auto; }
+.quiz-page { height: 100%; min-width: 0; display: flex; flex-direction: column; }
+.qp-body { flex: 1; min-height: 0; overflow-y: auto; }
 .qp-body-full { padding: 0; }
 
 /* Header */
@@ -573,9 +664,11 @@ function formatDate(d: string): string {
 }
 
 /* ====== Selection Layout ====== */
-.sel-layout { display: grid; grid-template-columns: 1fr 300px; gap: 28px; padding: 0 40px 40px; }
-.kb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.sel-layout.without-kb { display: block; max-width: 700px; margin: 0 auto; }
+.sel-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 28px; padding: 0 40px 40px; align-items: start; }
+.kb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr)); gap: 10px; }
 .kb-card {
+  width: 100%; min-width: 0; text-align: left; color: var(--text); font-family: var(--font);
   background: var(--bg-glass); border: 1px solid var(--border);
   border-radius: var(--rad); padding: 16px;
   cursor: pointer; transition: all .2s;
@@ -583,9 +676,9 @@ function formatDate(d: string): string {
 .kb-card:hover { border-color: var(--border-active); background: var(--bg-hover); }
 .kb-card.selected { border-color: var(--accent); background: var(--accent-glow); }
 .kb-card-top { display: flex; justify-content: space-between; align-items: flex-start; }
-.kb-info { flex: 1; }
-.kb-name { font-size: 14px; font-weight: 600; margin-bottom: 2px; }
-.kb-desc { font-size: 11px; color: var(--text-dim); }
+.kb-info { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.kb-name { display: block; font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+.kb-desc { display: block; font-size: 12px; color: var(--text-dim); }
 .kb-chk {
   width: 20px; height: 20px; border-radius: 6px;
   border: 1.5px solid var(--border);
@@ -620,7 +713,7 @@ function formatDate(d: string): string {
 .diff-btn:hover { border-color: var(--border-active); color: var(--text); }
 .diff-btn.on { border-color: var(--accent); background: var(--accent-glow); color: var(--accent); }
 
-.range { -webkit-appearance: none; appearance: none; width: 100%; height: 4px; border-radius: 4px; background: rgba(255,255,255,0.08); outline: none; }
+.range { -webkit-appearance: none; appearance: none; width: 100%; height: 4px; border-radius: 4px; background: var(--control-track); }
 .range::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: var(--accent); cursor: pointer; border: 2px solid var(--bg-root); box-shadow: 0 0 0 2px var(--accent); }
 .range::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--accent); cursor: pointer; border: 2px solid var(--bg-root); box-shadow: 0 0 0 2px var(--accent); }
 
@@ -650,23 +743,24 @@ function formatDate(d: string): string {
 
 .btn-start {
   width: 100%; padding: 12px; border-radius: var(--rad-sm);
-  border: none; background: var(--accent); color: #08080c;
+  border: none; background: var(--accent); color: var(--on-accent);
   font-size: 14px; font-weight: 700; cursor: pointer;
   font-family: var(--font); margin-top: 8px; transition: all .2s;
 }
-.btn-start:hover:not(:disabled) { background: #60cffa; }
+.btn-start:hover:not(:disabled) { background: var(--accent-dim); }
 .btn-start:disabled { opacity: .3; cursor: not-allowed; }
-.btn-start-hint { display: block; font-size: 10px; font-weight: 400; opacity: .6; margin-top: 2px; }
+.btn-start-hint { display: block; font-size: 12px; font-weight: 400; margin-top: 2px; overflow-wrap: anywhere; }
+.generation-error { margin-top: 12px; color: var(--red); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
 
 /* ====== Quiz Layout ====== */
-.quiz-layout { display: grid; grid-template-columns: 1fr 220px; gap: 24px; height: 100%; padding: 0 40px 24px; align-items: start; }
-.quiz-main { padding-top: 24px; }
+.quiz-layout { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 24px; padding: 0 40px 24px; align-items: start; }
+.quiz-main { min-width: 0; padding-top: 24px; }
 
 .quiz-progress { margin-bottom: 20px; }
 .quiz-progress-top { display: flex; justify-content: space-between; margin-bottom: 6px; }
 .quiz-p-label { font-size: 12px; color: var(--text-mut); font-weight: 600; }
 .quiz-p-count { font-family: var(--font-mono); font-size: 13px; }
-.quiz-p-track { height: 4px; background: rgba(255,255,255,0.06); border-radius: 4px; overflow: hidden; }
+.quiz-p-track { height: 4px; background: var(--control-track); border-radius: 4px; overflow: hidden; }
 .quiz-p-fill { height: 100%; background: var(--accent); border-radius: 4px; transition: width .3s; }
 
 .quiz-hd { display: flex; justify-content: space-between; align-items: center; padding-bottom: 16px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
@@ -682,6 +776,7 @@ function formatDate(d: string): string {
 .q-text { font-size: 16px; font-weight: 600; line-height: 1.6; margin-bottom: 24px; }
 .q-opts { display: flex; flex-direction: column; gap: 8px; }
 .q-opt {
+  width: 100%; min-width: 0; text-align: left; color: var(--text); font-family: var(--font);
   display: flex; align-items: center; gap: 12px;
   padding: 12px 16px; background: var(--bg-input);
   border: 1px solid var(--border); border-radius: var(--rad-sm);
@@ -696,8 +791,8 @@ function formatDate(d: string): string {
   font-size: 12px; font-weight: 700; font-family: var(--font-mono);
   color: var(--text-mut); flex-shrink: 0; transition: all .15s;
 }
-.q-opt.selected .q-opt-lbl { background: var(--accent); border-color: var(--accent); color: #08080c; }
-.q-opt-txt { flex: 1; line-height: 1.5; }
+.q-opt.selected .q-opt-lbl { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.q-opt-txt { flex: 1; min-width: 0; line-height: 1.5; overflow-wrap: anywhere; }
 
 .q-nav { display: flex; justify-content: space-between; align-items: center; margin-top: 20px; }
 .q-nav-left { display: flex; gap: 8px; }
@@ -711,10 +806,14 @@ function formatDate(d: string): string {
 .btn-nav:disabled { opacity: .25; cursor: not-allowed; }
 .btn-submit {
   padding: 8px 24px; border-radius: var(--rad-xs); border: none;
-  background: var(--green); color: #08080c; font-size: 12px;
+  background: var(--green); color: var(--on-accent); font-size: 12px;
   font-weight: 700; font-family: var(--font); cursor: pointer; transition: all .2s;
 }
-.btn-submit:hover { background: #6ee7b7; }
+.btn-submit:hover:not(:disabled) { box-shadow: 0 0 0 3px var(--green-dim); }
+.btn-submit:disabled { opacity: .55; cursor: not-allowed; }
+.q-opt[aria-disabled='true'] { cursor: default; }
+.submission-error { margin-top: 16px; color: var(--red); line-height: 1.7; }
+.submission-error p { margin-bottom: 12px; }
 
 /* Sidebar */
 .quiz-side { padding-top: 24px; }
@@ -790,10 +889,10 @@ function formatDate(d: string): string {
 .btn-secondary:hover { border-color: var(--border-active); color: var(--text); }
 .btn-primary {
   padding: 10px 24px; border-radius: var(--rad-sm); border: none;
-  background: var(--accent); color: #08080c; font-size: 13px;
+  background: var(--accent); color: var(--on-accent); font-size: 13px;
   font-weight: 700; font-family: var(--font); cursor: pointer; transition: all .2s;
 }
-.btn-primary:hover { background: #60cffa; }
+.btn-primary:hover { background: var(--accent-dim); }
 
 /* Transition */
 .slide-enter-active, .slide-leave-active { transition: all .2s ease-out; }
@@ -815,7 +914,7 @@ function formatDate(d: string): string {
   cursor: pointer; transition: all .15s;
 }
 .qp-tab:hover { color: var(--text); }
-.qp-tab.active { background: var(--accent); color: #08080c; }
+.qp-tab.active { background: var(--accent); color: var(--on-accent); }
 
 /* ====== History Panel ====== */
 .history-panel { max-width: 800px; margin: 0 auto; padding: 0 40px 40px; }
@@ -897,8 +996,8 @@ function formatDate(d: string): string {
   background: rgba(255,255,255,0.04); border: 1px solid var(--border);
   flex-shrink: 0;
 }
-.hl-opt.hl-opt-correct .hl-opt-key { background: var(--green); border-color: var(--green); color: #08080c; }
-.hl-opt.hl-opt-user .hl-opt-key { background: var(--red); border-color: var(--red); color: #08080c; }
+.hl-opt.hl-opt-correct .hl-opt-key { background: var(--green); border-color: var(--green); color: var(--on-accent); }
+.hl-opt.hl-opt-user .hl-opt-key { background: var(--red); border-color: var(--red); color: var(--on-accent); }
 .hl-opt-val { flex: 1; }
 .hl-opt-mark { font-size: 10px; font-weight: 600; }
 .hl-opt-mark.cr { color: var(--green); }
@@ -934,4 +1033,35 @@ function formatDate(d: string): string {
 .hfade-enter-active, .hfade-leave-active { transition: all .2s ease; overflow: hidden; }
 .hfade-enter-from, .hfade-leave-to { opacity: 0; max-height: 0; margin-top: 0; padding-top: 0; }
 .hfade-enter-to, .hfade-leave-from { opacity: 1; }
+
+.q-text, .rev-q, .rev-exp, .hl-question, .hl-explanation, .hl-answers { overflow-wrap: anywhere; }
+
+@media (max-width: 1100px) {
+  .sel-layout, .quiz-layout { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .cfg { position: static; }
+  .quiz-side { padding-top: 0; }
+}
+
+@media (max-width: 768px) {
+  .qp-hd { padding: 0 0 16px; }
+  .sel-layout, .quiz-layout, .history-panel { padding: 0 0 24px; }
+  .res-wrap { padding: 16px 0 24px; }
+  .cfg, .q-card, .qs-sec, .history-filters, .rev-item { padding: 16px; }
+  .quiz-main { padding-top: 0; }
+  .quiz-hd, .q-nav, .q-nav-left, .hl-top, .hl-top-left, .hl-top-right { flex-wrap: wrap; gap: 10px; }
+  .q-nav-left { flex: 1 1 100%; }
+  .q-nav-left .btn-nav { flex: 1; padding: 8px; }
+  .q-opt { padding: 12px; gap: 8px; }
+  .score-hero { padding: 24px 12px; }
+  .score-grid { gap: 20px; flex-wrap: wrap; }
+  .res-actions { flex-wrap: wrap; }
+  .hf-group { width: 100%; min-width: 0; }
+  .hf-select, .hf-date { width: 100%; min-width: 0; }
+  .hl-item { padding: 16px 12px; }
+  .hl-opt { flex-wrap: wrap; }
+  .hl-opt-val { min-width: 0; overflow-wrap: anywhere; }
+  .hl-opt-mark { flex-basis: 100%; }
+  .history-pagination { flex-wrap: wrap; gap: 12px; }
+  .hp-info { flex-basis: 100%; text-align: center; order: -1; }
+}
 </style>

@@ -1,7 +1,6 @@
 package com.jobai.agent.tool;
 
 import com.jobai.common.JobAiProperties.RetrievalProperties;
-import com.jobai.common.JobAiProperties.RetrievalProperties.RetrievalTier;
 import com.jobai.common.auth.AuthContext;
 import com.jobai.knowledge.llm.LlmService;
 import com.jobai.knowledge.retrieval.RerankService;
@@ -13,18 +12,19 @@ import dev.langchain4j.agent.tool.Tool;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Component
+@com.jobai.common.ConditionalOnRagEnabled
 public class KnowledgeRetrievalTool extends AgentTool<KnowledgeRetrievalTool.Params, String> {
 
-    private static final int RERANK_TOP_N = 10;
-    private static final int RERANK_FINAL_K = 5;
+    private static final int MIN_CANDIDATES = 10;
+    private static final int MAX_CANDIDATES = 50;
 
     private final VectorRetrievalService retrievalService;
-    private final RetrievalTier defaults;
     private final LlmService llmService;
     private final RerankService rerankService;
 
@@ -34,7 +34,6 @@ public class KnowledgeRetrievalTool extends AgentTool<KnowledgeRetrievalTool.Par
                                    RerankService rerankService) {
         super("knowledgeRetrieval", "搜索知识库获取相关内容。当用户询问具体技术问题时使用");
         this.retrievalService = retrievalService;
-        this.defaults = retrievalConfig.getDefaults();
         this.llmService = llmService;
         this.rerankService = rerankService;
     }
@@ -46,6 +45,11 @@ public class KnowledgeRetrievalTool extends AgentTool<KnowledgeRetrievalTool.Par
         return executeWithRetry(new Params(query, topK));
     }
 
+    /** Chat callers supply recent plain-text history for resolving follow-up questions. */
+    public String search(String query, Integer topK, String history) {
+        return executeWithRetry(new Params(query, topK, history));
+    }
+
     @Override
     protected String execute(Params p) {
         long t0 = System.currentTimeMillis();
@@ -55,8 +59,11 @@ public class KnowledgeRetrievalTool extends AgentTool<KnowledgeRetrievalTool.Par
         String rewritten = p.query;
         if (llmService.isAvailable()) {
             try {
-                String r = llmService.queryRewrite(p.query);
-                if (r != null && !r.isBlank()) { rewritten = r; rewrittenFlag = true; }
+                String r = llmService.queryRewrite(p.query, p.history);
+                if (r != null && !r.isBlank()) {
+                    rewritten = r.strip();
+                    rewrittenFlag = !rewritten.equals(p.query);
+                }
             } catch (Exception e) {
                 log.warn("[knowledgeRetrieval] rewrite failed, using original: {}", e.getMessage());
             }
@@ -65,7 +72,10 @@ public class KnowledgeRetrievalTool extends AgentTool<KnowledgeRetrievalTool.Par
 
         // 2. Dynamic retrieval params
         RetrievalParams rp = retrievalService.computeParams(rewritten);
-        int k = p.topK != null && p.topK > 0 ? p.topK : rp.topK();
+        int finalK = Math.max(1, Math.min(MAX_CANDIDATES,
+                p.topK != null && p.topK > 0 ? p.topK : rp.topK()));
+        int candidateK = Math.min(MAX_CANDIDATES,
+                Math.max(MIN_CANDIDATES, Math.max(rp.topK(), finalK * 2)));
         double minScore = rp.minScore();
 
         // 3. Dual-path retrieval (hybrid search + relevance check + RRF fusion)
@@ -73,7 +83,7 @@ public class KnowledgeRetrievalTool extends AgentTool<KnowledgeRetrievalTool.Par
                 ? List.of(p.query)
                 : List.of(rewritten, p.query);
         Long currentUserId = AuthContext.get();
-        var results = retrievalService.search(candidates, null, k, minScore, currentUserId);
+        var results = retrievalService.search(candidates, null, candidateK, minScore, currentUserId);
         var chunks = results;
         int retrievalCount = chunks.size();
         long t2 = System.currentTimeMillis();
@@ -81,18 +91,22 @@ public class KnowledgeRetrievalTool extends AgentTool<KnowledgeRetrievalTool.Par
         // 4. Rerank
         boolean reranked = false;
         if (rerankService.isAvailable() && chunks.size() > 1) {
-            int rerankSize = Math.min(chunks.size(), RERANK_TOP_N);
+            int rerankSize = Math.min(chunks.size(), MAX_CANDIDATES);
             List<String> texts = chunks.subList(0, rerankSize).stream()
                     .map(RetrievedChunk::content)
                     .toList();
             try {
-                List<Integer> indices = rerankService.rerank(p.query, texts, rerankSize);
+                List<Integer> indices = rerankService.rerank(rewritten, texts, rerankSize);
                 if (indices != null && !indices.isEmpty()) {
-                    List<RetrievedChunk> rerankedList = indices.stream()
-                            .map(chunks::get)
-                            .limit(RERANK_FINAL_K)
-                            .toList();
-                    if (!rerankedList.isEmpty()) {
+                    // Remote ranking responses may be partial or contain malformed indices.
+                    var order = new LinkedHashSet<Integer>();
+                    for (Integer index : indices) {
+                        if (index != null && index >= 0 && index < rerankSize) order.add(index);
+                    }
+                    if (!order.isEmpty()) {
+                        for (int i = 0; i < chunks.size(); i++) order.add(i);
+                        List<RetrievedChunk> rerankedList = new ArrayList<>();
+                        for (Integer index : order) rerankedList.add(chunks.get(index));
                         chunks = rerankedList;
                         reranked = true;
                     }
@@ -101,6 +115,8 @@ public class KnowledgeRetrievalTool extends AgentTool<KnowledgeRetrievalTool.Par
                 log.warn("[knowledgeRetrieval] rerank failed, keeping RRF order: {}", e.getMessage());
             }
         }
+        // Final context budget applies equally to successful reranking and fallback paths.
+        chunks = chunks.stream().limit(finalK).toList();
         int finalCount = chunks.size();
         long t3 = System.currentTimeMillis();
 
@@ -128,16 +144,21 @@ public class KnowledgeRetrievalTool extends AgentTool<KnowledgeRetrievalTool.Par
         return "知识检索暂时不可用，请稍后再试。";
     }
 
-    public record Params(String query, Integer topK) {}
+    public record Params(String query, Integer topK, String history) {
+        public Params(String query, Integer topK) { this(query, topK, null); }
+    }
 
     private static String formatChunks(List<RetrievedChunk> chunks) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < chunks.size(); i++) {
             RetrievedChunk r = chunks.get(i);
             String source = r.headingPath() != null && !r.headingPath().isBlank()
-                    ? r.headingPath() : "(未知来源)";
-            sb.append("[%d] 来源：%s (相关度: %.2f)\n%s"
-                    .formatted(i + 1, source, r.score(), r.content()));
+                    ? r.headingPath() : "未提供标题";
+            sb.append("[%d] 来源：%s".formatted(i + 1, source));
+            if (r.kbId() != null) sb.append("；知识库 ID：").append(r.kbId());
+            if (r.docId() != null) sb.append("；文档 ID：").append(r.docId());
+            if (r.chunkId() != null && !r.chunkId().isBlank()) sb.append("；片段 ID：").append(r.chunkId());
+            sb.append('\n').append(r.content());
             if (i < chunks.size() - 1) sb.append("\n\n");
         }
         return sb.toString();

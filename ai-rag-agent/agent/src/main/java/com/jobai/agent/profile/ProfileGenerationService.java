@@ -13,6 +13,8 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.ArrayList;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -32,12 +34,15 @@ public class ProfileGenerationService {
     private final ObjectMapper objectMapper;
     private final InterviewSkillService skillService;
 
+    private record SkillProfile(String summary, List<CategoryProfile> categories, String nextAdvice) {}
+    private record CategoryProfile(String category, String level, String text) {}
+
     @Async("taskExecutor")
-    public void generateOrUpdateProfileAsync(Long userId, String skillId,
+    public void generateOrUpdateProfileAsync(Long userId, SkillDTO skill,
                                               EvaluationReport report,
                                               List<InterviewQuestionDTO> questions) {
+        String skillId = skill.id();
         try {
-            SkillDTO skill = skillService.getSkill(skillId);
 
             // 读旧画像
             String oldProfileJson = null;
@@ -54,14 +59,34 @@ public class ProfileGenerationService {
             String raw = llmService.chat(systemPrompt, userPrompt);
             raw = raw.replaceAll("```[a-z]*\\s*", "").replace("```", "").strip();
 
-            // 验证是合法 JSON
-            objectMapper.readTree(raw);
+            // Validate the model boundary once; only a usable profile may replace the previous one.
+            var root = objectMapper.readTree(raw);
+            if (root == null || !root.isObject()
+                    || !root.path("summary").isTextual() || root.path("summary").textValue().isBlank()
+                    || !root.path("nextAdvice").isTextual() || root.path("nextAdvice").textValue().isBlank()
+                    || !root.path("categories").isArray() || root.path("categories").isEmpty()) {
+                throw new IllegalArgumentException("画像缺少有效的总结、分类或学习建议");
+            }
+            List<CategoryProfile> categories = new ArrayList<>();
+            for (var category : root.path("categories")) {
+                if (!category.isObject()
+                        || !category.path("category").isTextual() || category.path("category").textValue().isBlank()
+                        || !category.path("text").isTextual() || category.path("text").textValue().isBlank()
+                        || !category.path("level").isTextual()
+                        || !Set.of("strong", "adequate", "weak", "untouched").contains(category.path("level").textValue())) {
+                    throw new IllegalArgumentException("画像分类格式错误");
+                }
+                categories.add(new CategoryProfile(category.path("category").textValue(),
+                        category.path("level").textValue(), category.path("text").textValue()));
+            }
+            SkillProfile profile = new SkillProfile(root.path("summary").textValue(), categories,
+                    root.path("nextAdvice").textValue());
 
             // 落库
             jdbc.update(
                     "INSERT INTO user_skill_profile (user_id, skill_id, profile_json, interview_count) VALUES (?, ?, ?, 1) " +
                     "ON DUPLICATE KEY UPDATE profile_json = VALUES(profile_json), interview_count = interview_count + 1, updated_at = NOW()",
-                    userId, skillId, raw);
+                    userId, skillId, objectMapper.writeValueAsString(profile));
 
             log.info("Profile generated: userId={}, skillId={}", userId, skillId);
         } catch (Exception e) {

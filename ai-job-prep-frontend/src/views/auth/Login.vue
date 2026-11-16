@@ -103,8 +103,9 @@ async function submit() {
 
           <form class="auth-form" @submit.prevent="submit">
             <div class="input-group">
-              <label>用户名</label>
+              <label for="auth-username">用户名</label>
               <input
+                id="auth-username"
                 v-model="username"
                 class="auth-input"
                 :placeholder="mode === 'login' ? '输入用户名' : '2-50 个字符'"
@@ -112,13 +113,14 @@ async function submit() {
               />
             </div>
             <div class="input-group">
-              <label>密码</label>
+              <label for="auth-password">密码</label>
               <input
+                id="auth-password"
                 v-model="password"
                 type="password"
                 class="auth-input"
                 :placeholder="mode === 'login' ? '输入密码' : '至少 6 位'"
-                autocomplete="current-password"
+                :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
               />
             </div>
             <button class="auth-btn" type="submit" :disabled="loading">
@@ -128,9 +130,9 @@ async function submit() {
 
           <div class="auth-switch">
             <span>{{ mode === 'login' ? '还没有账号？' : '已有账号？' }}</span>
-            <a href="#" @click.prevent="toggleMode">
+            <button type="button" :disabled="loading" @click="toggleMode">
               {{ mode === 'login' ? '立即注册' : '去登录' }}
-            </a>
+            </button>
           </div>
         </div>
       </div>
@@ -140,7 +142,7 @@ async function submit() {
 
 <style scoped>
 .auth-root {
-  min-height: 100vh; position: relative; overflow: hidden;
+  height: 100vh; height: 100dvh; position: relative; overflow: auto;
   display: flex; align-items: center; justify-content: center;
   background: var(--bg-root, #06080f);
 }
@@ -220,11 +222,11 @@ async function submit() {
 /* ====== Layout ====== */
 .auth-stage {
   position: relative; z-index: 2; display: flex; gap: 80px;
-  align-items: center; max-width: 1100px; width: 100%; padding: 40px;
+  align-items: center; max-width: 1100px; width: 100%; padding: 40px; margin: auto;
 }
 
 /* ====== Left: Brand ====== */
-.brand-zone { flex: 1; min-width: 380px; }
+.brand-zone { flex: 1; min-width: 0; }
 
 .brand-logo { display: flex; align-items: center; gap: 12px; margin-bottom: 40px; }
 .brand-dot {
@@ -274,11 +276,11 @@ async function submit() {
 .auth-wrap { flex: 0 0 400px; }
 
 .auth-card {
-  background: var(--card-bg, rgba(12,16,28,0.85));
+  background: var(--bg-panel);
   border: 1px solid var(--border, rgba(255,255,255,0.08));
   border-radius: 24px; padding: 44px 40px;
   backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px);
-  box-shadow: 0 20px 60px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.03) inset;
+  box-shadow: 0 20px 60px var(--accent-glow);
   position: relative; overflow: hidden;
 }
 .auth-card::before {
@@ -305,13 +307,13 @@ async function submit() {
 
 .input-group { position: relative; }
 .input-group label {
-  display: block; font-size: 11px; color: var(--text-mut, #7b8ca0);
+  display: block; font-size: 13px; color: var(--text-mut, #7b8ca0);
   text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 6px;
   font-weight: 500;
 }
 .auth-input {
   width: 100%; padding: 13px 16px; font-size: 14px; font-family: var(--font, 'Satoshi', sans-serif);
-  background: var(--input-bg, rgba(255,255,255,0.03));
+  background: var(--bg-input);
   border: 1px solid var(--border, rgba(255,255,255,0.08));
   border-radius: 12px; color: var(--text, #e8ecf2); outline: none;
   transition: border-color 0.25s, box-shadow 0.25s, background 0.25s;
@@ -327,13 +329,9 @@ async function submit() {
   margin-top: 8px; width: 100%; padding: 14px; font-size: 15px;
   font-family: var(--font, 'Satoshi', sans-serif); font-weight: 600;
   border: none; border-radius: 12px; cursor: pointer;
-  background: linear-gradient(135deg, var(--accent, #38bdf8), #0369a1);
-  color: #fff; transition: transform 0.15s, box-shadow 0.25s, opacity 0.2s;
+  background: var(--accent);
+  color: var(--on-accent); transition: transform 0.15s, box-shadow 0.25s, opacity 0.2s;
   position: relative; overflow: hidden;
-}
-.auth-btn::after {
-  content: ''; position: absolute; inset: 0;
-  background: linear-gradient(135deg, rgba(255,255,255,0.15), transparent 60%);
 }
 .auth-btn:hover:not(:disabled) {
   transform: translateY(-1px);
@@ -346,12 +344,34 @@ async function submit() {
   text-align: center; margin-top: 22px; font-size: 13px;
   color: var(--text-mut, #7b8ca0);
 }
-.auth-switch a {
+.auth-switch button {
+  border: 0; background: none; font: inherit; padding: 2px;
   color: var(--accent, #38bdf8); text-decoration: none; font-weight: 500;
   cursor: pointer; transition: opacity 0.15s;
   margin-left: 2px;
 }
-.auth-switch a:hover { opacity: 0.8; }
+.auth-switch button:hover { text-decoration: underline; }
+.auth-switch button:disabled { cursor: not-allowed; }
+
+@media (max-width: 900px) {
+  .auth-stage { gap: 32px; padding: 32px; }
+  .auth-wrap { flex-basis: 360px; }
+  .brand-tagline { font-size: 34px; }
+  .auth-card { padding: 32px 28px; }
+}
+
+@media (max-width: 700px) {
+  .auth-root { align-items: flex-start; }
+  .auth-stage { flex-direction: column; gap: 24px; padding: 24px 16px; max-width: 460px; }
+  .brand-zone, .auth-wrap { width: 100%; flex: none; }
+  .brand-logo { margin-bottom: 16px; }
+  .brand-tagline { font-size: 28px; margin-bottom: 12px; }
+  .brand-desc { font-size: 14px; }
+  .brand-feats { gap: 8px; margin-top: 16px; }
+  .feat-badge { padding: 6px 10px; }
+  .auth-card { padding: 28px 24px; }
+  .auth-input { font-size: 16px; }
+}
 
 /* ====== Shake ====== */
 @keyframes shakeAnim {

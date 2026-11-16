@@ -7,24 +7,31 @@ export const useInterviewStore = defineStore('interview', () => {
   const session = ref<InterviewSessionDTO | null>(null)
   const report = ref<InterviewReportDTO | null>(null)
   const loading = ref(false)
+  let sessionRequest = 0
 
   async function create(req: Parameters<typeof interviewApi.createSession>[0]) {
+    const request = ++sessionRequest
     loading.value = true
     try {
-      session.value = await interviewApi.createSession(req)
+      const created = await interviewApi.createSession(req)
+      if (request !== sessionRequest) return null
+      session.value = created
       return session.value
     } finally {
-      loading.value = false
+      if (request === sessionRequest) loading.value = false
     }
   }
 
   async function load(sessionId: string) {
+    const request = ++sessionRequest
     loading.value = true
     try {
-      session.value = await interviewApi.getSession(sessionId)
+      const loaded = await interviewApi.getSession(sessionId)
+      if (request !== sessionRequest) return null
+      session.value = loaded
       return session.value
     } finally {
-      loading.value = false
+      if (request === sessionRequest) loading.value = false
     }
   }
 
@@ -36,6 +43,8 @@ export const useInterviewStore = defineStore('interview', () => {
   }
 
   function clear() {
+    sessionRequest++
+    loading.value = false
     session.value = null
     report.value = null
   }

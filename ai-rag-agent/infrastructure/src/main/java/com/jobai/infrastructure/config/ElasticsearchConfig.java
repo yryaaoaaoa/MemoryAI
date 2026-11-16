@@ -9,18 +9,20 @@ import org.apache.http.HttpHost;
 import org.apache.http.auth.AuthScope;
 import org.apache.http.auth.UsernamePasswordCredentials;
 import org.apache.http.client.CredentialsProvider;
-import org.apache.http.conn.ssl.NoopHostnameVerifier;
+import org.apache.http.ssl.SSLContexts;
 import org.apache.http.impl.client.BasicCredentialsProvider;
 import org.elasticsearch.client.RestClient;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import javax.net.ssl.SSLContext;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
-import java.security.cert.X509Certificate;
+import java.security.KeyStore;
+import java.security.cert.CertificateFactory;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 @Configuration
+@com.jobai.common.ConditionalOnRagEnabled
 public class ElasticsearchConfig {
 
     @Bean
@@ -32,15 +34,15 @@ public class ElasticsearchConfig {
         credentialsProvider.setCredentials(AuthScope.ANY,
                 new UsernamePasswordCredentials(es.getUsername(), es.getPassword()));
 
-        // trust-all SSL context (dev ES 8.x with self-signed certs)
-        SSLContext sslContext = buildPermissiveSslContext();
-
         return RestClient.builder(new HttpHost(es.getHost(), es.getPort(), es.getScheme()))
-                .setHttpClientConfigCallback(hcb -> hcb
-                        .setDefaultCredentialsProvider(credentialsProvider)
-                        .setSSLContext(sslContext)
-                        .setSSLHostnameVerifier(NoopHostnameVerifier.INSTANCE)
-                )
+                .setHttpClientConfigCallback(hcb -> {
+                    hcb.setDefaultCredentialsProvider(credentialsProvider);
+                    if (es.getCaCertificate() != null && !es.getCaCertificate().isBlank()) {
+                        hcb.setSSLContext(buildSslContext(es.getCaCertificate()));
+                    }
+                    // Otherwise retain the platform trust store and default hostname verification.
+                    return hcb;
+                })
                 .build();
     }
 
@@ -55,19 +57,19 @@ public class ElasticsearchConfig {
         return props.getRetrieval();
     }
 
-    private static SSLContext buildPermissiveSslContext() {
+    static SSLContext buildSslContext(String certificatePath) {
         try {
-            SSLContext ctx = SSLContext.getInstance("TLS");
-            ctx.init(null, new TrustManager[]{
-                    new X509TrustManager() {
-                        @Override public void checkClientTrusted(X509Certificate[] chain, String authType) {}
-                        @Override public void checkServerTrusted(X509Certificate[] chain, String authType) {}
-                        @Override public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
-                    }
-            }, null);
-            return ctx;
+            KeyStore trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
+            trustStore.load(null, null);
+            try (var in = Files.newInputStream(Path.of(certificatePath))) {
+                var certificates = CertificateFactory.getInstance("X.509").generateCertificates(in);
+                if (certificates.isEmpty()) throw new IllegalArgumentException("CA certificate file is empty");
+                int index = 0;
+                for (var certificate : certificates) trustStore.setCertificateEntry("es-ca-" + index++, certificate);
+            }
+            return SSLContexts.custom().loadTrustMaterial(trustStore, null).build();
         } catch (Exception e) {
-            throw new RuntimeException("Failed to create permissive SSLContext for ES", e);
+            throw new IllegalStateException("Cannot load Elasticsearch CA certificate", e);
         }
     }
 

@@ -5,40 +5,42 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import com.jobai.common.BusinessException;
+import com.jobai.common.ErrorCode;
 
-import java.sql.ResultSet;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * 错题本服务 — Redis 缓存 + MySQL 持久化
- *
- * Redis 数据结构:
- *   SortedSet "wrong:set:{userId}"   → member=questionId, score=错误时间戳
- *   Set       "wrong:topics:{userId}" → member=topic (知识点标签)
- *
- * 核心流程:
- *   答错 → 写入 MySQL quiz_record → 写入 Redis SortedSet
- *   答对 → 写入 MySQL quiz_record → 从 Redis SortedSet 移除
- *   查错题本 → Redis 分页取 questionId → MySQL JOIN 补全题目和用户答案
+ * 错题本与掌握度：以用户每道题的最新答题记录为准。
+ * 手动移除持久化到记录中，不删除答题历史，也不改变掌握度。
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class WrongQuestionService {
 
-    private final StringRedisTemplate redis;
     private final JdbcTemplate jdbc;
     private final ObjectMapper objectMapper;
 
-    static final String KEY_SET = "wrong:set:";
-    static final String KEY_TOPICS = "wrong:topics:";
+    private static final String ACTIVE_WRONG_FROM = """
+            FROM quiz_record r
+            JOIN quiz_question q ON q.id = r.question_id
+            WHERE r.user_id = ? AND r.is_correct = 0 AND r.wrong_removed = 0
+              AND (q.user_id = r.user_id OR q.user_id IS NULL)
+              AND NOT EXISTS (SELECT 1 FROM quiz_record newer
+                  WHERE newer.user_id = r.user_id AND newer.question_id = r.question_id AND newer.id > r.id)
+            """;
+    private static final String WRONG_COLUMNS = """
+            SELECT q.id, q.question_text, q.options_json, q.answer, q.explanation, q.topic,
+                   r.user_answer, r.score, r.created_at
+            """;
 
     // ======================== DTO ========================
 
@@ -90,58 +92,30 @@ public class WrongQuestionService {
 
     // ======================== 公开 API ========================
 
-    /**
-     * 记录答错 — 写入 Redis SortedSet
-     */
-    public void recordWrongAttempt(Long userId, Long questionId, String topic) {
-        redis.opsForZSet().add(KEY_SET + userId, String.valueOf(questionId), System.currentTimeMillis());
-        if (topic != null && !topic.isBlank()) {
-            redis.opsForSet().add(KEY_TOPICS + userId, topic);
-        }
-    }
-
-    /**
-     * 从错题本移出（答对或手动移除）
-     */
+    /** 移出当前错题；下一次答错会产生新的未移除记录。 */
     public void removeWrongQuestion(Long userId, Long questionId) {
-        redis.opsForZSet().remove(KEY_SET + userId, String.valueOf(questionId));
+        jdbc.update("UPDATE quiz_record SET wrong_removed = 1 WHERE user_id = ? AND question_id = ? AND is_correct = 0",
+                userId, questionId);
     }
 
-    /**
-     * 错题总数
-     */
     public long getWrongQuestionCount(Long userId) {
-        Long total = redis.opsForZSet().size(KEY_SET + userId);
-        return total != null ? total : 0L;
+        return jdbc.queryForObject("SELECT COUNT(*) " + ACTIVE_WRONG_FROM, Long.class, userId);
     }
 
-    /**
-     * 分页查询错题列表（最新在前）
-     *
-     * @param userId 用户 ID
-     * @param topic  知识点筛选（null 表示全部）
-     * @param page   页码（从 1 开始）
-     * @param size   每页条数
-     */
     public WrongQuestionPage listQuestions(Long userId, String topic, int page, int size) {
-        String setKey = KEY_SET + userId;
-        Long total = redis.opsForZSet().size(setKey);
-        if (total == null || total == 0) {
-            return WrongQuestionPage.empty(page, size);
+        List<Object> params = new ArrayList<>();
+        params.add(userId);
+        String from = ACTIVE_WRONG_FROM;
+        if (topic != null && !topic.isBlank()) {
+            from += " AND q.topic = ?";
+            params.add(topic);
         }
-
-        int start = (page - 1) * size;
-        int end = start + size - 1;
-        Set<String> idStrs = redis.opsForZSet().reverseRange(setKey, start, end);
-        if (idStrs == null || idStrs.isEmpty()) {
-            return WrongQuestionPage.empty(page, size);
-        }
-
-        List<Long> ids = idStrs.stream().map(Long::valueOf).toList();
-        List<WrongQuestionVO> questions = fetchWrongQuestions(userId, ids, topic);
-
+        long total = jdbc.queryForObject("SELECT COUNT(*) " + from, Long.class, params.toArray());
+        params.add(size);
+        params.add((long) (page - 1) * size);
         WrongQuestionPage result = new WrongQuestionPage();
-        result.setRecords(questions);
+        result.setRecords(jdbc.query(WRONG_COLUMNS + from + " ORDER BY r.id DESC LIMIT ? OFFSET ?",
+                wrongQuestionMapper(), params.toArray()));
         result.setPage(page);
         result.setSize(size);
         result.setTotal(total);
@@ -149,62 +123,45 @@ public class WrongQuestionService {
         return result;
     }
 
-    /**
-     * 错题知识点分布统计
-     */
     public List<WrongTopicVO> listTopics(Long userId) {
-        Set<String> topics = redis.opsForSet().members(KEY_TOPICS + userId);
-        if (topics == null || topics.isEmpty()) return List.of();
-
-        return topics.stream().map(t -> {
+        return jdbc.query("SELECT q.topic, COUNT(*) AS count " + ACTIVE_WRONG_FROM
+                + " GROUP BY q.topic ORDER BY count DESC, q.topic", (rs, rowNum) -> {
             WrongTopicVO vo = new WrongTopicVO();
-            vo.setTopic(t);
-            try {
-                Long cnt = jdbc.queryForObject(
-                        "SELECT COUNT(DISTINCT qr.question_id) FROM quiz_record qr " +
-                        "JOIN quiz_question q ON q.id = qr.question_id " +
-                        "WHERE qr.user_id = ? AND qr.is_correct = 0 AND q.topic = ?",
-                        Long.class, userId, t);
-                vo.setCount(cnt != null ? cnt : 0);
-            } catch (Exception e) {
-                vo.setCount(0);
-            }
+            vo.setTopic(rs.getString("topic"));
+            vo.setCount(rs.getLong("count"));
             return vo;
-        }).sorted((a, b) -> Long.compare(b.count, a.count)).toList();
+        }, userId);
     }
 
-    /**
-     * 从错题本随机抽题重做
-     */
+    /** 从全部当前错题中抽取，而不只在最近的几题中抽取。 */
     public List<WrongQuestionVO> getRetryQuestions(Long userId, int count) {
-        Set<String> ids = redis.opsForZSet().reverseRange(KEY_SET + userId, 0, count * 2 - 1);
-        if (ids == null || ids.isEmpty()) return List.of();
-
-        List<Long> idList = new ArrayList<>(ids.stream().map(Long::valueOf).toList());
-        Collections.shuffle(idList);
-        List<Long> picked = idList.subList(0, Math.min(count, idList.size()));
-
-        return fetchWrongQuestions(userId, picked, null);
+        return jdbc.query(WRONG_COLUMNS + ACTIVE_WRONG_FROM + " ORDER BY RAND() LIMIT ?",
+                wrongQuestionMapper(), userId, count);
     }
 
     /**
-     * 提交答案 — 自动批改（选择题精确匹配）+ 记录到 MySQL + 更新 Redis
+     * 提交答案 — 答题记录与掌握度在同一事务中保存
      */
+    @Transactional
     public SubmitResult submitAnswer(Long userId, Long questionId, String userAnswer, int durationSec) {
         // 1. 取题
-        var question = jdbc.queryForMap(
-                "SELECT question_type, answer, explanation, topic FROM quiz_question WHERE id = ?",
-                questionId);
+        var rows = jdbc.queryForList(
+                """
+                SELECT question_type, answer, explanation, topic FROM quiz_question q
+                WHERE q.id = ? AND (q.user_id = ? OR (q.user_id IS NULL AND EXISTS (
+                    SELECT 1 FROM quiz_record r WHERE r.question_id = q.id AND r.user_id = ?)))
+                """, questionId, userId, userId);
+        if (rows.isEmpty()) throw new BusinessException(ErrorCode.NOT_FOUND, "题目不存在");
+        var question = rows.get(0);
 
         String correctAnswer = str(question.get("answer"));
         String explanation = str(question.get("explanation"));
         String topic = str(question.get("topic"));
         String qType = str(question.get("question_type"));
 
-        // 2. 自动批改
-        boolean isCorrect = "choice".equals(qType)
-                && userAnswer != null
-                && userAnswer.strip().equalsIgnoreCase(correctAnswer.strip());
+        if (!"choice".equals(qType)) throw new IllegalArgumentException("此接口仅支持选择题");
+        // 答案已在接口入口校验并标准化。
+        boolean isCorrect = userAnswer.equalsIgnoreCase(correctAnswer.strip());
         int score = isCorrect ? 100 : 0;
 
         // 3. 入库
@@ -212,14 +169,7 @@ public class WrongQuestionService {
                 "INSERT INTO quiz_record (user_id, question_id, user_answer, is_correct, score, duration_sec, mastery_delta) VALUES (?, ?, ?, ?, ?, ?, 0)",
                 userId, questionId, userAnswer, isCorrect ? 1 : 0, score, durationSec);
 
-        // 4. 更新 Redis
-        if (isCorrect) {
-            removeWrongQuestion(userId, questionId);
-        } else {
-            recordWrongAttempt(userId, questionId, topic);
-        }
-
-        // 5. 更新 user_mastery
+        // 4. 当前错题由最新记录计算；同时更新掌握度。
         updateUserMastery(userId, topic, isCorrect);
 
         SubmitResult result = new SubmitResult();
@@ -238,22 +188,24 @@ public class WrongQuestionService {
      */
     private void updateUserMastery(Long userId, String topic, boolean isCorrect) {
         if (topic == null || topic.isBlank()) return;
+        // MySQL assignments run left to right: derive values before updating their counters.
+        // Bound the exponent before DATE_ADD so long correct streaks cannot overflow a date.
         jdbc.update("""
                 INSERT INTO user_mastery (user_id, topic, mastery, total_attempts, correct_attempts, streak, next_review_at)
                 VALUES (?, ?, ?, 1, ?, ?,
                     DATE_ADD(CURDATE(), INTERVAL IF(?, 2, 1) DAY))
                 AS new
                 ON DUPLICATE KEY UPDATE
-                    total_attempts = user_mastery.total_attempts + 1,
-                    correct_attempts = user_mastery.correct_attempts + new.correct_attempts,
-                    streak = IF(new.streak > 0, user_mastery.streak + 1, 0),
                     mastery = LEAST(100, ROUND(
                         (user_mastery.correct_attempts + new.correct_attempts) * 100.0
                         / (user_mastery.total_attempts + 1))),
                     next_review_at = IF(new.correct_attempts > 0,
-                        LEAST(DATE_ADD(CURDATE(), INTERVAL 30 DAY),
-                              DATE_ADD(CURDATE(), INTERVAL POW(2, COALESCE(user_mastery.streak, 0) + 1) DAY)),
-                        DATE_ADD(CURDATE(), INTERVAL 1 DAY))
+                        DATE_ADD(CURDATE(), INTERVAL LEAST(30,
+                            POW(2, LEAST(5, COALESCE(user_mastery.streak, 0) + 1))) DAY),
+                        DATE_ADD(CURDATE(), INTERVAL 1 DAY)),
+                    total_attempts = user_mastery.total_attempts + 1,
+                    correct_attempts = user_mastery.correct_attempts + new.correct_attempts,
+                    streak = IF(new.streak > 0, user_mastery.streak + 1, 0)
                 """,
                 userId, topic, isCorrect ? 100 : 0, isCorrect ? 1 : 0, isCorrect ? 1 : 0, isCorrect ? 1 : 0);
     }
@@ -270,11 +222,11 @@ public class WrongQuestionService {
                 VALUES (?, ?, ?, ?, ?, 0, DATE_ADD(CURDATE(), INTERVAL 7 DAY))
                 AS new
                 ON DUPLICATE KEY UPDATE
-                    total_attempts = user_mastery.total_attempts + new.total_attempts,
-                    correct_attempts = user_mastery.correct_attempts + new.correct_attempts,
                     mastery = LEAST(100, ROUND(
                         (user_mastery.correct_attempts + new.correct_attempts) * 100.0
                         / (user_mastery.total_attempts + new.total_attempts))),
+                    total_attempts = user_mastery.total_attempts + new.total_attempts,
+                    correct_attempts = user_mastery.correct_attempts + new.correct_attempts,
                     next_review_at = DATE_ADD(CURDATE(), INTERVAL 7 DAY)
                 """,
                 userId, topic, score, questionCount, (int) Math.round(score * questionCount / 100.0));
@@ -301,6 +253,7 @@ public class WrongQuestionService {
                 "FROM quiz_record r " +
                 "JOIN quiz_question q ON q.id = r.question_id " +
                 "WHERE r.user_id = ? AND r.question_id IN (" + placeholders + ") " +
+                "AND (q.user_id = r.user_id OR q.user_id IS NULL) " +
                 "AND r.id = (SELECT MAX(r2.id) FROM quiz_record r2 WHERE r2.user_id = ? AND r2.question_id = r.question_id)",
                 params.toArray());
 
@@ -320,39 +273,8 @@ public class WrongQuestionService {
 
     // ======================== 内部方法 ========================
 
-    /**
-     * 根据 questionId 列表，批量从 MySQL 查出题目详情 + 用户最近一次错误答案
-     */
-    private List<WrongQuestionVO> fetchWrongQuestions(Long userId, List<Long> ids, String topic) {
-        if (ids.isEmpty()) return List.of();
-
-        String placeholders = ids.stream().map(id -> "?").collect(Collectors.joining(","));
-
-        String sql = """
-            SELECT q.id, q.question_text, q.options_json, q.answer, q.explanation, q.topic,
-                   r.user_answer, r.score, r.created_at
-            FROM (
-                SELECT question_id, MAX(id) AS max_id
-                FROM quiz_record
-                WHERE user_id = ? AND is_correct = 0 AND question_id IN (%s)
-                GROUP BY question_id
-            ) latest
-            JOIN quiz_record r ON r.id = latest.max_id
-            JOIN quiz_question q ON q.id = latest.question_id
-            """ + (topic != null && !topic.isBlank() ? " AND q.topic = ?" : "") + """
-            ORDER BY r.created_at DESC
-            """;
-
-        String finalSql = String.format(sql, placeholders);
-
-        List<Object> params = new ArrayList<>();
-        params.add(userId);
-        params.addAll(ids);
-        if (topic != null && !topic.isBlank()) {
-            params.add(topic);
-        }
-
-        RowMapper<WrongQuestionVO> mapper = (ResultSet rs, int rowNum) -> {
+    private RowMapper<WrongQuestionVO> wrongQuestionMapper() {
+        return (rs, rowNum) -> {
             WrongQuestionVO vo = new WrongQuestionVO();
             vo.setId(rs.getLong("id"));
             vo.setQuestionText(rs.getString("question_text"));
@@ -367,7 +289,6 @@ public class WrongQuestionService {
             return vo;
         };
 
-        return jdbc.query(finalSql, mapper, params.toArray());
     }
 
     private Map<String, String> parseOptions(String json) {

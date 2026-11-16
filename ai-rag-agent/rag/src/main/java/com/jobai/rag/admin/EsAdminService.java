@@ -1,5 +1,7 @@
 package com.jobai.rag.admin;
 
+import com.jobai.common.auth.AuthContext;
+
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch._types.ElasticsearchException;
 import co.elastic.clients.elasticsearch._types.SortOrder;
@@ -28,6 +30,7 @@ import java.util.*;
 @Service
 @RequiredArgsConstructor
 @Slf4j
+@com.jobai.common.ConditionalOnRagEnabled
 public class EsAdminService {
 
     private static final List<String> SYSTEM_INDEX_PREFIXES = List.of(
@@ -40,6 +43,7 @@ public class EsAdminService {
     private final ObjectMapper objectMapper;
 
     public List<EsIndexInfo> listIndices() {
+        AuthContext.requireAdmin();
         try {
             Request request = new Request("GET", "/_cat/indices?format=json&bytes=b");
             Response response = lowLevelClient.performRequest(request);
@@ -66,6 +70,7 @@ public class EsAdminService {
     }
 
     public Map<String, Object> getMapping(String index) {
+        AuthContext.requireAdmin();
         assertNotSystemIndex(index);
         try {
             GetMappingResponse response = client.indices().getMapping(g -> g.index(index));
@@ -95,6 +100,7 @@ public class EsAdminService {
     }
 
     public EsIndexInfo getIndexInfo(String index) {
+        AuthContext.requireAdmin();
         assertNotSystemIndex(index);
         List<EsIndexInfo> all = listIndices();
         return all.stream()
@@ -104,6 +110,7 @@ public class EsAdminService {
     }
 
     public PageResult<EsDocumentVO> listDocs(String index, int page, int size, String query) {
+        AuthContext.requireAdmin();
         assertNotSystemIndex(index);
         try {
             SearchResponse<Map> searchResponse = client.search(s -> {
@@ -124,7 +131,7 @@ public class EsAdminService {
                 records.add(EsDocumentVO.builder()
                         .id(hit.id())
                         .source(hit.source())
-                        .score(hit.score().floatValue())
+                        .score(hit.score() == null ? null : hit.score().floatValue())
                         .build());
             }
 
@@ -135,6 +142,7 @@ public class EsAdminService {
     }
 
     public Map<String, Object> getDoc(String index, String id) {
+        AuthContext.requireAdmin();
         assertNotSystemIndex(index);
         try {
             GetResponse<Map> getResponse = client.get(g -> g
@@ -160,6 +168,7 @@ public class EsAdminService {
     }
 
     public void deleteIndex(String index) {
+        AuthContext.requireAdmin();
         assertNotSystemIndex(index);
         try {
             client.indices().delete(d -> d.index(index));
@@ -175,6 +184,7 @@ public class EsAdminService {
     }
 
     public void deleteDoc(String index, String id) {
+        AuthContext.requireAdmin();
         assertNotSystemIndex(index);
         try {
             client.delete(d -> d.index(index).id(id));
@@ -190,6 +200,7 @@ public class EsAdminService {
     }
 
     public long deleteByQuery(String index, String query) {
+        AuthContext.requireAdmin();
         assertNotSystemIndex(index);
         try {
             Long deleted = client.deleteByQuery(d -> d

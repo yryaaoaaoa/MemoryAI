@@ -1,8 +1,11 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
+import { isAxiosError } from 'axios'
 import { authApi } from '@/api/auth.api'
 import type { UserVO } from '@/api/auth.api'
 import router from '@/router'
+import { useKnowledgeBaseStore } from './knowledge-base.store'
+import { confirmNoteLeave, withConfirmedNoteNavigation } from '@/utils/note-leave-guard'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<UserVO | null>(null)
@@ -22,24 +25,36 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function login(username: string, password: string) {
-    user.value = await authApi.login(username, password)
+    const loggedIn = await authApi.login(username, password)
+    useKnowledgeBaseStore().reset()
+    user.value = loggedIn
     router.push('/ask')
   }
 
   async function register(username: string, password: string) {
-    user.value = await authApi.register(username, password)
-    // 注册后自动登录 — 注册端点会设置会话 cookie
-    // 但注册不设置会话，所以需要调用登录
+    await authApi.register(username, password)
+    // Registering an account does not authenticate it.
     await authApi.login(username, password)
     user.value = await authApi.me()
+    useKnowledgeBaseStore().reset()
     router.push('/ask')
   }
 
-  async function logout() {
-    try { await authApi.logout() } catch { /* 忽略 */ }
+  function clearSession() {
+    useKnowledgeBaseStore().reset()
     user.value = null
-    router.push('/login')
+    checked.value = true
   }
 
-  return { user, checked, userId, isLoggedIn, checkAuth, login, register, logout }
+  async function logout() {
+    if (!(await confirmNoteLeave())) return
+    try { await authApi.logout() } catch (error) {
+      // An expired session is already logged out; other failures must keep the page intact.
+      if (!isAxiosError(error) || error.response?.status !== 401) return
+    }
+    clearSession()
+    await withConfirmedNoteNavigation(() => router.push('/login'))
+  }
+
+  return { user, checked, userId, isLoggedIn, checkAuth, login, register, logout, clearSession }
 })

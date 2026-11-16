@@ -9,6 +9,7 @@ import com.jobai.common.auth.CurrentUserId;
 import com.jobai.rag.entity.ChatMessage;
 import com.jobai.rag.entity.ChatSession;
 import com.jobai.rag.service.ChatSessionService;
+import com.jobai.rag.service.LearningNoteService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.Data;
@@ -33,6 +34,7 @@ public class RagController {
     private final ChatSessionService chatSessionService;
     private final QuizService quizService;
     private final StreamingChatService streamingChatService;
+    private final LearningNoteService learningNoteService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     // ==================== 会话 ====================
@@ -68,7 +70,7 @@ public class RagController {
                                               @RequestBody(required = false) CreateSessionBody body) {
         ChatSession session = chatSessionService.createSession(null, userId);
         if (body != null && body.getTitle() != null) {
-            chatSessionService.updateTitle(session.getId(), body.getTitle());
+            chatSessionService.updateTitle(session.getId(), body.getTitle(), userId);
         }
         return R.ok(session);
     }
@@ -97,25 +99,27 @@ public class RagController {
                                        @RequestBody Map<String, Object> body) {
         SseEmitter emitter = new SseEmitter(300_000L);
         String message = (String) body.getOrDefault("message", "");
+        if (message == null || message.isBlank()) throw new IllegalArgumentException("消息不能为空");
         Object sid = body.get("sessionId");
 
         Long sessionId = null;
         List<Map<String, Object>> history = new ArrayList<>();
         String summariesText = "";
         String resumeText = "";
+        Integer replyOrder = null;
         if (sid != null) {
             sessionId = Long.valueOf(sid.toString());
-            chatSessionService.appendMessage(sessionId, "user", message,
-                    chatSessionService.nextOrder(sessionId));
-            ChatSessionService.ChatContext ctx = chatSessionService.loadHistoryWithContext(sessionId);
+            ChatSessionService.ChatContext ctx = chatSessionService.beginUserTurn(sessionId, userId, message);
+            replyOrder = ctx.replyOrder();
             for (ChatMessage msg : ctx.windowMessages()) {
                 history.add(buildHistoryMessage(msg));
             }
             summariesText = ctx.summariesText();
+            summariesText += learningNoteService.contextForSession(sessionId, userId);
             resumeText = ctx.resumeText();
         }
 
-        streamingChatService.streamChat(message, history, emitter, sessionId, userId, summariesText, resumeText);
+        streamingChatService.streamChat(message, history, emitter, sessionId, userId, summariesText, resumeText, replyOrder);
         return emitter;
     }
 
@@ -134,12 +138,9 @@ public class RagController {
     public R<List<QuizService.QuizQuestionDTO>> generateQuiz(
             @CurrentUserId Long userId,
             @RequestBody QuizGenerateRequest req) {
-        if (req.getKbIds() == null || req.getKbIds().isEmpty()) {
-            return R.fail("请选择至少一个知识库");
-        }
         AuthContext.set(userId, "user");
         try {
-            return R.ok(quizService.generateByKbs(req.getKbIds(), req.getCount(), req.getDifficulty(), req.getTopic()));
+            return R.ok(quizService.generateByKbs(req.getKbIds() == null ? List.of() : req.getKbIds(), req.getCount(), req.getDifficulty(), req.getTopic()));
         } catch (IllegalArgumentException e) {
             return R.fail(ErrorCode.QUIZ_GENERATE_FAILED.getCode(), e.getMessage());
         } finally {

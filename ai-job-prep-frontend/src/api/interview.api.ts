@@ -135,7 +135,11 @@ export const interviewApi = {
 
   /** 获取面试报告 */
   getReport(sessionId: string) {
-    return request.get<any, InterviewReportDTO | { ready: boolean; message: string }>(`/api/interview/sessions/${sessionId}/report`)
+    return request.get<any, InterviewReportDTO | { ready: false; status?: 'PENDING' | 'PROCESSING' | 'FAILED'; error?: string; message?: string }>(`/api/interview/sessions/${sessionId}/report`)
+  },
+
+  retryEvaluation(sessionId: string) {
+    return request.post<any, void>(`/api/interview/sessions/${sessionId}/retry-evaluation`)
   },
 
   /** 删除面试会话 */

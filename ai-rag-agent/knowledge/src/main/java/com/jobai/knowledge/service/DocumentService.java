@@ -24,6 +24,7 @@ import java.util.List;
 @Slf4j
 @Service
 @RequiredArgsConstructor
+@com.jobai.common.ConditionalOnRagEnabled
 public class DocumentService {
 
     private final DocumentMapper documentMapper;
@@ -60,21 +61,29 @@ public class DocumentService {
         }
 
         String fileHash = sha256(fileContent);
-        Document existing = documentMapper.selectByFileHash(fileHash);
+        Document existing = documentMapper.selectByKbAndFileHash(kbId, fileHash);
         if (existing != null) {
-            if (existing.getIsDelete() == 1 || DocumentStatus.FAILED.equals(existing.getStatus())) {
-                knowledgeStore.deleteByDocId(existing.getId());
-                chunkMapper.delete(new LambdaQueryWrapper<Chunk>().eq(Chunk::getDocId, existing.getId()));
-
+            if (Integer.valueOf(1).equals(existing.getIsDelete()) || DocumentStatus.FAILED.equals(existing.getStatus())) {
                 existing.setFileName(fileName);
                 existing.setFileSize(file.getSize());
+                existing.setUserId(kb.getUserId());
+                if (documentMapper.restartDocument(existing) != 1) {
+                    throw new BusinessException(ErrorCode.BAD_REQUEST, "文档已在处理中，请勿重复上传");
+                }
                 existing.setStatus(DocumentStatus.UPLOADING);
                 existing.setChunkCount(0);
                 existing.setErrorMessage(null);
                 existing.setIsDelete(0);
-                documentMapper.updateById(existing);
-
-                documentProcessor.processDocument(existing.getId(), fileContent);
+                try {
+                    knowledgeStore.deleteByDocId(existing.getId());
+                    chunkMapper.delete(new LambdaQueryWrapper<Chunk>().eq(Chunk::getDocId, existing.getId()));
+                    documentProcessor.processDocument(existing.getId(), fileContent);
+                } catch (RuntimeException e) {
+                    existing.setStatus(DocumentStatus.FAILED);
+                    existing.setErrorMessage("重新处理失败");
+                    documentMapper.updateById(existing);
+                    throw e;
+                }
                 return existing;
             }
             throw new BusinessException(ErrorCode.BAD_REQUEST, "文件已存在，请勿重复上传");
@@ -85,7 +94,7 @@ public class DocumentService {
         doc.setFileName(fileName);
         doc.setFileHash(fileHash);
         doc.setFileSize(file.getSize());
-        doc.setUserId(userId);
+        doc.setUserId(kb.getUserId());
         doc.setStatus(DocumentStatus.UPLOADING);
         doc.setChunkCount(0);
         documentMapper.insert(doc);
@@ -114,8 +123,12 @@ public class DocumentService {
         if (doc == null || doc.getIsDelete() != null && doc.getIsDelete() == 1) {
             throw new BusinessException(ErrorCode.KNOWLEDGE_NOT_FOUND, "文档不存在");
         }
-        // Access allowed if doc belongs to user, or doc belongs to system KB (visible to all)
-        if (doc.getUserId() != null && !userId.equals(doc.getUserId()) && !Long.valueOf(0).equals(doc.getUserId())) {
+        KnowledgeBase kb = knowledgeBaseMapper.selectById(doc.getKbId());
+        if (kb == null || Integer.valueOf(1).equals(kb.getIsDelete())) {
+            throw new BusinessException(ErrorCode.KNOWLEDGE_NOT_FOUND);
+        }
+        // Visibility belongs to the KB, including older documents uploaded by an administrator.
+        if (!userId.equals(kb.getUserId()) && !Long.valueOf(0).equals(kb.getUserId())) {
             throw new BusinessException(ErrorCode.FORBIDDEN, "无权访问此文档");
         }
         return doc;
@@ -153,6 +166,11 @@ public class DocumentService {
     @Transactional
     public void deleteDocument(Long docId, Long userId) {
         Document doc = getDocument(docId, userId);
+        KnowledgeBase kb = knowledgeBaseMapper.selectById(doc.getKbId());
+        if (Long.valueOf(0).equals(kb.getUserId()) && !AuthContext.isAdmin()) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "系统公共知识库仅管理员可删除文档");
+        }
+        documentProcessor.cancel(docId);
         knowledgeStore.deleteByDocId(docId);
         chunkMapper.delete(new LambdaQueryWrapper<Chunk>().eq(Chunk::getDocId, docId));
         documentMapper.deleteById(docId);

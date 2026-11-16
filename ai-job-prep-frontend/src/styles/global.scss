@@ -4,6 +4,10 @@
   --bg-root: #08080c;
   --bg-sidebar: rgba(8,8,12,0.85);
   --bg-elevated: #0d0d16;
+  --bg-panel: #12121c;
+  --bg-code: rgba(0,0,0,0.3);
+  --control-track: #475569;
+  --scrollbar-thumb: #64748b;
   --bg-glass: rgba(255,255,255,0.035);
   --bg-hover: rgba(255,255,255,0.06);
   --bg-input: rgba(255,255,255,0.04);
@@ -11,9 +15,10 @@
   --border-active: rgba(255,255,255,0.12);
   --text: #e2e8f0;
   --text-mut: #94a3b8;
-  --text-dim: #475569;
+  --text-dim: #94a3b8;
   --accent: #38bdf8;
-  --accent-dim: #0284c7;
+  --accent-dim: #7dd3fc;
+  --on-accent: #082f49;
   --accent-glow: rgba(56,189,248,0.08);
   --green: #34d399;
   --green-dim: rgba(52,211,153,0.12);
@@ -22,6 +27,7 @@
   --amber: #fbbf24;
   --rad: 10px;
   --rad-sm: 8px;
+  --rad-xs: 6px;
   --font: 'Satoshi', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-display: 'Cabinet Grotesk', 'Satoshi', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
@@ -31,22 +37,27 @@ html[data-theme="light"] {
   --bg-root: #f8fafc;
   --bg-sidebar: rgba(248,250,252,0.9);
   --bg-elevated: #f1f5f9;
+  --bg-panel: #ffffff;
+  --bg-code: #e2e8f0;
+  --control-track: #94a3b8;
+  --scrollbar-thumb: #94a3b8;
   --bg-glass: rgba(255,255,255,0.7);
   --bg-hover: rgba(0,0,0,0.04);
   --bg-input: rgba(0,0,0,0.02);
   --border: rgba(0,0,0,0.08);
   --border-active: rgba(2,132,199,0.4);
   --text: #0f172a;
-  --text-mut: #64748b;
-  --text-dim: #94a3b8;
-  --accent: #0284c7;
-  --accent-dim: #0369a1;
+  --text-mut: #526277;
+  --text-dim: #526277;
+  --accent: #0369a1;
+  --accent-dim: #075985;
+  --on-accent: #ffffff;
   --accent-glow: rgba(2,132,199,0.1);
-  --green: #059669;
+  --green: #047857;
   --green-dim: rgba(5,150,105,0.12);
   --red: #dc2626;
   --red-dim: rgba(220,38,38,0.1);
-  --amber: #d97706;
+  --amber: #b45309;
 
   /* Element Plus overrides */
   --el-bg-color-overlay: rgba(255,255,255,0.92);
@@ -93,6 +104,7 @@ body::before {
   --el-fill-color-blank: var(--bg-input);
   --el-fill-color: var(--bg-glass);
   --el-fill-color-light: var(--bg-hover);
+  --el-fill-color-lighter: var(--bg-glass);
   --el-border-radius-base: var(--rad-sm);
   --el-box-shadow: 0 8px 32px rgba(0,0,0,0.4);
 }
@@ -103,9 +115,9 @@ body::before {
 .el-button--primary {
   --el-button-bg-color: var(--accent);
   --el-button-border-color: transparent;
-  --el-button-text-color: #fff;
+  --el-button-text-color: var(--on-accent);
   --el-button-hover-bg-color: var(--accent-dim);
-  --el-button-hover-text-color: #fff;
+  --el-button-hover-text-color: var(--on-accent);
   font-weight: 600;
 }
 .el-button:not(.el-button--primary) {
@@ -134,7 +146,7 @@ body::before {
   transition: border-color 0.2s, box-shadow 0.2s !important;
 }
 .el-input__wrapper:hover { border-color: var(--border-active) !important; }
-.el-input.is-focus .el-input__wrapper {
+.el-input__wrapper:focus-within {
   border-color: var(--accent) !important;
   box-shadow: 0 0 0 3px var(--accent-glow) !important;
 }
@@ -143,13 +155,14 @@ body::before {
   background: var(--bg-input) !important; border: 1px solid var(--border) !important;
   color: var(--text) !important; font-family: var(--font) !important; border-radius: var(--rad-sm) !important;
 }
-.el-textarea.is-focus .el-textarea__inner {
+.el-textarea__inner:focus {
   border-color: var(--accent) !important;
   box-shadow: 0 0 0 3px var(--accent-glow) !important;
 }
 
 .el-dialog {
-  background: rgba(14,14,20,0.96) !important;
+  background: var(--bg-panel) !important;
+  max-width: calc(100vw - 32px);
   border: 1px solid var(--border) !important;
   border-radius: 14px !important;
   backdrop-filter: blur(20px);
@@ -179,7 +192,7 @@ body::before {
 
 .el-form-item__label { color: var(--text-mut) !important; font-family: var(--font) !important; }
 .el-pagination button, .el-pager li { color: var(--text-mut) !important; }
-.el-pager li.is-active { color: #fff !important; background: var(--accent) !important; }
+.el-pager li.is-active { color: var(--on-accent) !important; background: var(--accent) !important; }
 
 .el-select .el-input__wrapper { background: var(--bg-input) !important; }
 .el-select-dropdown { background: var(--bg-glass) !important; backdrop-filter: blur(16px) !important; border: 1px solid var(--border) !important; }
@@ -192,12 +205,48 @@ body::before {
 
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.14); }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-mut); }
 
-::selection { background: rgba(56,189,248,0.25); color: #fff; }
+::selection { background: var(--accent); color: var(--on-accent); }
 
 /* Light mode tweaks */
 html[data-theme="light"] .ambient { opacity: 0.2; }
-html[data-theme="light"] .el-dialog { background: rgba(255,255,255,0.95) !important; }
-html[data-theme="light"] .el-message { background: rgba(255,255,255,0.9) !important; }
+.el-message { --el-message-bg-color: var(--bg-panel); backdrop-filter: blur(12px); }
+.el-tag { border-radius: 6px; }
+.el-radio-button__original-radio:checked + .el-radio-button__inner {
+  background: var(--accent) !important; color: var(--on-accent) !important;
+}
+.el-button--primary.is-plain {
+  --el-button-bg-color: var(--accent-glow);
+  --el-button-text-color: var(--accent);
+  --el-button-border-color: var(--accent);
+  --el-button-hover-bg-color: var(--accent);
+}
+.el-button--primary:active { --el-button-active-text-color: var(--on-accent); }
+.el-input__inner::placeholder, .el-textarea__inner::placeholder { color: var(--text-dim); }
+#app { height: 100vh; height: 100dvh; overflow: hidden; }
+button, input, textarea, select { font-family: inherit; }
+:where(button, a, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 3px;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0s !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .el-pagination { flex-wrap: wrap; justify-content: flex-start; gap: 8px; }
+  .el-pagination > * { margin: 0 !important; }
+}
+
+.el-button--primary.is-link, .el-button--primary.is-text {
+  --el-button-text-color: var(--accent);
+  --el-button-hover-text-color: var(--accent-dim);
+  --el-button-active-text-color: var(--accent);
+}

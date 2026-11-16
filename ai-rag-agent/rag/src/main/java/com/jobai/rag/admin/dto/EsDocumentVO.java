@@ -10,5 +10,5 @@ import java.util.Map;
 public class EsDocumentVO {
     String id;
     Map<String, Object> source;
-    float score;
+    Float score;
 }

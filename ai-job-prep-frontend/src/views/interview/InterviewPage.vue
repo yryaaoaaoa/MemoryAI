@@ -43,8 +43,21 @@ function viewSession(sid: string) {
   router.push(`/interview/report/${sid}`)
 }
 
-function continueSession(sid: string) {
-  store.load(sid).then(() => { phase.value = 'interview' })
+async function continueSession(sid: string) {
+  try {
+    const loaded = await store.load(sid)
+    if (!loaded) return
+    if (loaded.status === 'COMPLETED' || loaded.status === 'EVALUATED') {
+      viewSession(sid)
+    } else {
+      phase.value = 'interview'
+    }
+  } catch { /* request interceptor displays the failure */ }
+}
+
+function openSession(s: SessionListItem) {
+  if (s.status === 'COMPLETED' || s.status === 'EVALUATED') viewSession(s.sessionId)
+  else continueSession(s.sessionId)
 }
 
 async function deleteSession(sid: string) {
@@ -79,14 +92,14 @@ const skillDescr = computed(() => skills.value.find(s => s.id === selectedSkillI
 async function createSession() {
   creating.value = true
   try {
-    await store.create({
+    const created = await store.create({
       skillId: selectedSkillId.value,
       difficulty: difficulty.value,
       questionCount: questionCount.value,
       mode: interviewMode.value,
       resumeId: selectedResumeId.value,
     })
-    phase.value = 'interview'
+    if (created) phase.value = 'interview'
   } catch { /* handled */ }
   finally { creating.value = false }
 }
@@ -94,42 +107,76 @@ async function createSession() {
 // === Interview ===
 const answerText = ref('')
 const submitting = ref(false)
+const saving = ref(false)
+const completing = ref(false)
+const answerBusy = computed(() => submitting.value || saving.value || completing.value)
 const currentQuestion = ref<InterviewQuestionDTO | null>(null)
 
 watch(() => store.session, (s) => {
   if (!s) return
   currentQuestion.value = s.questions[s.currentQuestionIndex] ?? null
+  answerText.value = currentQuestion.value?.userAnswer ?? ''
 }, { immediate: true })
 
+async function persistDraft(sessionId: string, question: InterviewQuestionDTO, answer: string) {
+  await interviewApi.saveAnswer(sessionId, question.questionIndex, answer)
+  if (store.session?.sessionId !== sessionId) return
+  const saved = { ...question, userAnswer: answer }
+  store.session.questions[question.questionIndex] = saved
+  if (currentQuestion.value?.questionIndex === question.questionIndex) currentQuestion.value = saved
+}
+
+async function saveDraft() {
+  if (answerBusy.value || !store.session || !currentQuestion.value) return
+  saving.value = true
+  try {
+    await persistDraft(store.session.sessionId, currentQuestion.value, answerText.value)
+    ElMessage.success('答案已暂存')
+  } catch { /* Keep the editor and its unsaved answer intact. */ }
+  finally { saving.value = false }
+}
+
 async function submitAnswer() {
+  if (answerBusy.value) return
   const s = store.session
   if (!s || !currentQuestion.value) return
   if (!answerText.value.trim()) { ElMessage.warning('请先填写答案'); return }
   submitting.value = true
   try {
-    await interviewApi.submitAnswer(s.sessionId, currentQuestion.value.questionIndex, answerText.value)
-    const updated = await store.load(s.sessionId)
-    if (!updated) return
-    if (updated.currentQuestionIndex >= updated.questions.length) {
+    const questionIndex = currentQuestion.value.questionIndex
+    const answer = answerText.value
+    const result = await interviewApi.submitAnswer(s.sessionId, questionIndex, answer)
+    const questions = s.questions.map(q => q.questionIndex === questionIndex ? { ...q, userAnswer: answer } : q)
+    if (result.nextQuestion) questions[result.nextQuestion.questionIndex] = result.nextQuestion
+    store.session = { ...s, questions, currentQuestionIndex: result.currentIndex, totalQuestions: result.totalQuestions,
+      status: result.hasNext ? 'IN_PROGRESS' : 'COMPLETED' }
+    if (!result.hasNext) {
       currentQuestion.value = null; phase.value = 'completed'
       ElMessage.success('全部答完！评估已开始，请稍后再查看报告')
-    } else {
-      currentQuestion.value = updated.questions[updated.currentQuestionIndex]
-      answerText.value = ''
     }
   } catch { /* handled */ }
   finally { submitting.value = false }
 }
 
 async function completeEarly() {
+  if (answerBusy.value) return
   const s = store.session
   if (!s) return
+  completing.value = true
   try {
-    await ElMessageBox.confirm('确定提前交卷？未答题目将记为未回答。', '确认')
+    await ElMessageBox.confirm('确定提前交卷？未答题目将记为未回答。', '确认', {
+      confirmButtonText: '提前交卷', cancelButtonText: '继续答题',
+    })
+    const question = currentQuestion.value
+    if (question && answerText.value !== (question.userAnswer ?? '')) {
+      await persistDraft(s.sessionId, question, answerText.value)
+    }
     await interviewApi.completeInterview(s.sessionId)
+    s.status = 'COMPLETED'
     phase.value = 'completed'
     ElMessage.success('已交卷，评估已开始')
-  } catch { /* cancel */ }
+  } catch { /* Cancellation/save failure keeps the current draft editable. */ }
+  finally { completing.value = false }
 }
 
 function goToReport() {
@@ -163,7 +210,7 @@ function statusBadgeClass(status: string): string {
   <div v-else-if="filteredSessions.length === 0" class="empty">暂无面试记录</div>
   <div v-else class="sl">
     <div v-for="s in filteredSessions" :key="s.sessionId" class="sc">
-      <div class="sc-body" @click="s.status==='EVALUATED' ? viewSession(s.sessionId) : continueSession(s.sessionId)">
+      <div class="sc-body" role="button" tabindex="0" @click="openSession(s)" @keydown.enter="openSession(s)" @keydown.space.prevent="openSession(s)">
         <div class="sc-hdr">
           <span class="sc-title">{{ s.skillId }}</span>
           <span :class="statusBadgeClass(s.status)">{{ statusMeta(s) }}</span>
@@ -176,7 +223,7 @@ function statusBadgeClass(status: string): string {
       </div>
       <div class="sc-acts">
         <button v-if="s.status==='CREATED'||s.status==='IN_PROGRESS'" class="sa sa-go" @click="continueSession(s.sessionId)">继续</button>
-        <button v-else-if="s.status==='EVALUATED'" class="sa sa-go" @click="viewSession(s.sessionId)">报告</button>
+        <button v-else-if="s.status==='COMPLETED'||s.status==='EVALUATED'" class="sa sa-go" @click="viewSession(s.sessionId)">{{ s.status === 'COMPLETED' ? '查看评估进度' : '报告' }}</button>
         <button class="sa sa-del" @click="deleteSession(s.sessionId)">删除</button>
       </div>
     </div>
@@ -241,7 +288,7 @@ function statusBadgeClass(status: string): string {
 <div v-else-if="phase === 'interview'" class="page">
   <div class="ph">
     <div><h1 class="pg-ttl">模拟面试</h1><p class="pg-sub">{{ store.session ? 'Java 后端' : '' }}</p></div>
-    <button class="btn" @click="phase='list'">退出</button>
+    <button class="btn" :disabled="answerBusy" @click="phase='list'">退出</button>
   </div>
 
   <div class="pv">
@@ -257,12 +304,12 @@ function statusBadgeClass(status: string): string {
     </div>
     <div class="ans-area">
       <span class="ans-lbl">你的回答</span>
-      <textarea v-model="answerText" class="ans-ta" :placeholder="currentQuestion.userAnswer ?? '输入你的回答...'" rows="6" />
+      <textarea v-model="answerText" :disabled="answerBusy" class="ans-ta" aria-label="面试回答" placeholder="输入你的回答..." rows="6" />
     </div>
     <div class="iv-acts">
-      <button class="btn btn-accent" :disabled="submitting" @click="submitAnswer">{{ submitting ? '提交中...' : '提交并继续' }}</button>
-      <button class="btn" @click="answerText = currentQuestion.userAnswer ?? ''">暂存</button>
-      <button class="btn btn-del" @click="completeEarly">提前交卷</button>
+      <button class="btn btn-accent" :disabled="answerBusy" @click="submitAnswer">{{ submitting ? '提交中...' : '提交并继续' }}</button>
+      <button class="btn" :disabled="answerBusy" @click="saveDraft">{{ saving ? '暂存中...' : '暂存' }}</button>
+      <button class="btn btn-del" :disabled="answerBusy" @click="completeEarly">{{ completing ? '交卷中...' : '提前交卷' }}</button>
     </div>
   </template>
   <div v-else class="empty">加载题目中...</div>
@@ -282,7 +329,7 @@ function statusBadgeClass(status: string): string {
 
 <style scoped>
 /* ── root page ── */
-.page { max-width:min(100% - 40px, 900px); margin:0 auto; }
+.page { max-width:900px; margin:0 auto; }
 .ph { display:flex; align-items:center; justify-content:space-between; margin-bottom:28px; flex-wrap:wrap; gap:14px; }
 .pg-ttl { font-family:var(--font-display); font-size:26px; font-weight:800; letter-spacing:-.5px; }
 .pg-sub { font-size:13px; color:var(--text-mut); margin-top:2px; }
@@ -291,8 +338,8 @@ function statusBadgeClass(status: string): string {
 /* ── buttons ── */
 .btn { background:transparent; color:var(--text); border:1px solid var(--border); padding:9px 22px; border-radius:10px; cursor:pointer; font-size:13px; font-family:var(--font); transition:all .15s; white-space:nowrap; }
 .btn:hover { border-color:var(--accent); color:var(--accent); }
-.btn-accent { background:var(--accent); color:#000; border-color:var(--accent); font-weight:600; }
-.btn-accent:hover { background:var(--accent-dim); border-color:var(--accent-dim); color:#fff; }
+.btn-accent { background:var(--accent); color:var(--on-accent); border-color:var(--accent); font-weight:600; }
+.btn-accent:hover { background:var(--accent-dim); border-color:var(--accent-dim); color:var(--on-accent); }
 .btn-accent:disabled { opacity:0.4; cursor:not-allowed; }
 .btn-del { color:var(--red); border-color:rgba(248,113,113,0.2); }
 .btn-del:hover { border-color:var(--red); color:var(--red); background:rgba(248,113,113,0.04); }
@@ -300,7 +347,7 @@ function statusBadgeClass(status: string): string {
 /* ── tab bar ── */
 .tabbar { display:flex; gap:2px; background:var(--bg-glass); border:1px solid var(--border); border-radius:12px; padding:3px; margin-bottom:24px; width:fit-content; }
 .tb { padding:7px 20px; border:none; border-radius:10px; background:transparent; color:var(--text-mut); cursor:pointer; font-size:12px; font-family:var(--font); transition:all .12s; }
-.tb.on { background:var(--accent); color:#000; font-weight:600; }
+.tb.on { background:var(--accent); color:var(--on-accent); font-weight:600; }
 .tb:hover:not(.on) { color:var(--text); }
 
 /* ── session list ── */
@@ -335,7 +382,7 @@ function statusBadgeClass(status: string): string {
 
 /* ── progress ── */
 .pv { display:flex; align-items:center; gap:10px; margin-bottom:24px; }
-.pv-bar { flex:1; height:3px; background:rgba(255,255,255,0.06); border-radius:2px; overflow:hidden; }
+.pv-bar { flex:1; height:3px; background:var(--control-track); border-radius:2px; overflow:hidden; }
 .pv-fill { height:100%; background:var(--accent); border-radius:2px; transition:width .35s; }
 .pv-lbl { font-size:13px; color:var(--text-mut); white-space:nowrap; font-weight:600; }
 
@@ -343,14 +390,14 @@ function statusBadgeClass(status: string): string {
 .qb { border:1px solid var(--border); border-radius:14px; padding:24px 28px; margin-bottom:20px; }
 .qb-tag { display:inline-flex; align-items:center; gap:4px; font-size:12px; color:var(--accent); font-weight:500; margin-bottom:12px; }
 .qb-t { font-size:15px; line-height:1.8; color:var(--text); }
-.qb-fup { margin-top:16px; padding:14px 18px; border-left:2px solid #a78bfa; background:rgba(167,139,250,0.03); border-radius:0 8px 8px 0; font-size:13px; color:#a78bfa; line-height:1.7; }
-.qb-fup::before { content:'追问'; display:block; font-size:10px; font-weight:600; margin-bottom:4px; opacity:.5; letter-spacing:.5px; }
+.qb-fup { margin-top:16px; padding:14px 18px; border-left:2px solid var(--accent); background:rgba(167,139,250,0.03); border-radius:0 8px 8px 0; font-size:13px; color:var(--accent); line-height:1.7; }
+.qb-fup::before { content:'追问'; display:block; font-size:10px; font-weight:600; margin-bottom:4px; letter-spacing:.5px; }
 
 /* ── answer ── */
 .ans-area { margin-bottom:16px; }
 .ans-lbl { display:block; font-size:12px; font-weight:600; margin-bottom:8px; color:var(--text); }
 .ans-ta { width:100%; min-height:140px; resize:vertical; background:var(--bg-input); border:1px solid var(--border); border-radius:12px; color:var(--text); font-family:var(--font); font-size:14px; line-height:1.7; padding:16px 18px; transition:all .2s; outline:none; }
-.ans-ta:focus { border-color:var(--border-active); box-shadow:0 0 0 3px var(--accent-glow); }
+.ans-ta:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-glow); }
 .ans-ta::placeholder { color:var(--text-dim); }
 
 /* ── actions ── */
@@ -363,4 +410,14 @@ function statusBadgeClass(status: string): string {
 
 /* ── setup acts ── */
 .setup-acts { display:flex; gap:10px; margin-top:28px; }
+@media (max-width: 768px) {
+  .sc { flex-wrap: wrap; }
+  .sc-body { min-width: 0; flex-basis: 100%; flex-direction: column; align-items: stretch; padding: 16px; gap: 8px; }
+  .sc-acts { width: 100%; justify-content: flex-end; border-left: none; border-top: 1px solid var(--border); padding: 8px; }
+  .sc-hdr { flex-wrap: wrap; }
+  .sc-meta { flex-wrap: wrap; gap: 8px; }
+  .qb { padding: 16px; }
+  .chip { max-width: 100%; overflow-wrap: anywhere; }
+  .tb { padding-inline: 14px; }
+}
 </style>

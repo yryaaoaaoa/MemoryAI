@@ -4,21 +4,34 @@ import { authApi, type UserProfile, type SkillProfile } from '@/api/auth.api'
 
 const profile = ref<UserProfile | null>(null)
 const loading = ref(true)
+const loadError = ref('')
 const activeSkill = ref<string | null>(null)
 
-onMounted(async () => {
+async function loadProfile() {
+  loading.value = true
+  loadError.value = ''
   try {
     profile.value = await authApi.getProfile()
     if (profile.value?.skillProfiles?.length) {
       activeSkill.value = profile.value.skillProfiles[0].skillId
     }
-  } catch { /* ok */ }
+  } catch { loadError.value = '加载用户画像失败，请重试' }
   finally { loading.value = false }
-})
+}
+
+onMounted(loadProfile)
 
 const activeProfile = computed<SkillProfile | undefined>(() =>
   profile.value?.skillProfiles?.find(s => s.skillId === activeSkill.value)
 )
+
+// Older saved profiles may predate server-side structure validation.
+const activeCategories = computed(() => {
+  const categories = activeProfile.value?.profileJson?.categories
+  return Array.isArray(categories) ? categories.filter(cat => cat && typeof cat === 'object' && typeof cat.category === 'string') : []
+})
+const hasProfileContent = computed(() => !!(activeProfile.value?.profileJson?.summary
+  || activeProfile.value?.profileJson?.nextAdvice || activeCategories.value.length))
 
 function levelBadgeClass(level: string) {
   return level === 'strong' ? 'l-strong'
@@ -43,6 +56,10 @@ function levelLabel(level: string) {
     </div>
 
     <div v-if="loading" class="pf-empty">加载中...</div>
+    <div v-else-if="loadError" class="pf-empty" role="alert">
+      <p>{{ loadError }}</p>
+      <button class="pf-tab" @click="loadProfile">重试加载</button>
+    </div>
 
     <template v-if="profile">
       <!-- Stats row -->
@@ -61,7 +78,7 @@ function levelLabel(level: string) {
         </div>
         <div class="pf-stat">
           <span class="pf-stat-val">{{ profile.wrongQuestionCount }}</span>
-          <span class="pf-stat-lbl">待复习</span>
+          <span class="pf-stat-lbl">错题数</span>
         </div>
       </div>
 
@@ -101,7 +118,7 @@ function levelLabel(level: string) {
 
           <!-- Categories -->
           <div
-            v-for="cat in activeProfile.profileJson?.categories ?? []"
+            v-for="cat in activeCategories"
             :key="cat.category"
             class="pf-cat-card"
           >
@@ -119,8 +136,8 @@ function levelLabel(level: string) {
           </div>
 
           <!-- Raw profile fallback if JSON parse fails -->
-          <div v-if="!activeProfile.profileJson" class="pf-sec-mut">
-            画像数据格式异常
+          <div v-if="!hasProfileContent" class="pf-sec-mut" role="alert">
+            画像暂不可用，完成一次面试后可重新生成。
           </div>
         </div>
       </section>

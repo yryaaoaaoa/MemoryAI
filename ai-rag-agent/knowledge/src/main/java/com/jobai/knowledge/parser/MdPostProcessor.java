@@ -5,14 +5,9 @@ import dev.langchain4j.data.document.Metadata;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestClient;
-
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -25,18 +20,17 @@ public class MdPostProcessor {
     private static final Pattern HEADING_PATTERN = Pattern.compile("^(#{1,6})\\s+(.+)$", Pattern.MULTILINE);
 
     private final PaddleOcrService paddleOcrService;
-    private final RestClient restClient = RestClient.builder().build();
 
     /**
      * Process markdown: OCR images and split by headings.
      *
      * @param mdText   raw markdown text
-     * @param basePath directory for resolving relative image paths (null = skip local OCR, network URLs still fetched)
+     * @param uploadedImages image bytes explicitly supplied with this request, keyed by Markdown image reference
      * @return list of Documents, each with heading_path metadata
      */
-    public List<Document> process(String mdText, String basePath) {
+    public List<Document> process(String mdText, Map<String, byte[]> uploadedImages) {
         // Step 1: OCR images and inject text
-        String enhanced = ocrImages(mdText, basePath);
+        String enhanced = ocrImages(mdText, uploadedImages);
 
         // Step 2: Split by heading hierarchy
         return splitByHeadings(enhanced);
@@ -45,7 +39,7 @@ public class MdPostProcessor {
     /**
      * OCR only — returns enhanced text without heading splitting.
      */
-    public String ocrImages(String mdText, String basePath) {
+    public String ocrImages(String mdText, Map<String, byte[]> uploadedImages) {
         // No images at all — fast path
         if (mdText == null || !mdText.contains("![")) return mdText;
 
@@ -59,10 +53,15 @@ public class MdPostProcessor {
             String altText = m.group(1);
             String imgPath = m.group(2);
 
-            String ocrText = doOcr(imgPath, basePath);
+            // Never dereference a URL or filesystem path supplied in Markdown. Only request attachments
+            // may be passed to OCR; unresolved references remain intact instead of losing source content.
+            byte[] bytes = uploadedImages == null ? null : uploadedImages.get(imgPath);
+            String ocrText = bytes == null || bytes.length == 0 ? "" : paddleOcrService.ocrImage(bytes, imgPath);
             if (!ocrText.isEmpty()) {
                 sb.append("\n[OCR:").append(altText.isEmpty() ? "图片" : altText).append("]\n")
                         .append(ocrText).append("\n[/OCR]\n");
+            } else {
+                sb.append(m.group());
             }
 
             lastEnd = m.end();
@@ -70,50 +69,6 @@ public class MdPostProcessor {
 
         sb.append(mdText.substring(lastEnd));
         return sb.toString();
-    }
-
-    private String doOcr(String imgPath, String basePath) {
-        try {
-            byte[] bytes = null;
-
-            // 1) Network image URL
-            if (imgPath.startsWith("http://") || imgPath.startsWith("https://")) {
-                try {
-                    bytes = restClient.get().uri(imgPath).retrieve().body(byte[].class);
-                } catch (Exception e) {
-                    log.warn("Failed to fetch image URL: {} - {}", imgPath, e.getMessage());
-                    return "";
-                }
-            } else {
-                // 2) Local file path
-                Path resolved = resolveImagePath(imgPath, basePath);
-                if (resolved == null || !Files.exists(resolved)) {
-                    log.warn("Image not found: {} (basePath={})", imgPath, basePath);
-                    return "";
-                }
-                bytes = Files.readAllBytes(resolved);
-            }
-
-            if (bytes == null || bytes.length == 0) return "";
-
-            String text = paddleOcrService.ocrImage(bytes, imgPath);
-            log.info("OCR result for {}: {} chars", imgPath, text.length());
-            return text;
-        } catch (Exception e) {
-            log.error("OCR error for {}: {}", imgPath, e.getMessage());
-            return "";
-        }
-    }
-
-    private Path resolveImagePath(String imgPath, String basePath) {
-        Path path = Paths.get(imgPath);
-        if (path.isAbsolute()) {
-            return path;
-        }
-        if (basePath != null) {
-            return Paths.get(basePath).resolve(path).normalize();
-        }
-        return null;
     }
 
     /**

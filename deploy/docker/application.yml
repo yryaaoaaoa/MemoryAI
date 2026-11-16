@@ -1,0 +1,87 @@
+server:
+  port: 8080
+  forward-headers-strategy: framework
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+    session:
+      cookie:
+        name: MEMORAISESSION
+        http-only: true
+        secure: ${COOKIE_SECURE:false}
+        same-site: lax
+        path: /
+        max-age: 1800
+
+spring:
+  application:
+    name: memoryai
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 60MB
+  datasource:
+    url: jdbc:mysql://mysql:3306/memoryai?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
+    username: memoryai
+    password: ${DB_PASS}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+  data:
+    redis:
+      host: redis
+      port: 6379
+      password: ${REDIS_PASS}
+      timeout: 5000
+  session:
+    store-type: redis
+    timeout: 1800
+    redis:
+      namespace: spring:session:memoryai
+      flush-mode: on_save
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: isDelete
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+jobai:
+  rag:
+    enabled: ${RAG_ENABLED:true}
+  elasticsearch:
+    host: elasticsearch
+    port: 9200
+    scheme: http
+    username: ""
+    password: ""
+  embedding:
+    provider: siliconflow
+  siliconflow:
+    api-key: ${SILICONFLOW_API_KEY}
+    base-url: ${SILICONFLOW_BASE_URL:https://api.siliconflow.cn/v1}
+    model: ${EMBEDDING_MODEL:BAAI/bge-m3}
+  deepseek:
+    api-key: ${DEEPSEEK_API_KEY}
+    base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+    model: ${DEEPSEEK_MODEL:deepseek-v4-flash}
+  ocr:
+    paddle:
+      server-url: ${OCR_PADDLE_URL:}
+      access-token: ${OCR_PADDLE_TOKEN:}
+
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false

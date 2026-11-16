@@ -50,12 +50,15 @@ mybatis-plus:
 
 # Elasticsearch
 jobai:
+  rag:
+    enabled: ${RAG_ENABLED:false}
   elasticsearch:
-    host: ${ES_HOST}
+    host: ${ES_HOST:localhost}
     port: ${ES_PORT:9200}
     scheme: https
     username: ${ES_USER:elastic}
-    password: ${ES_PASS}
+    password: ${ES_PASS:}
+    ca-certificate: ${ES_CA_CERT:}
 
   # Ollama (Embedding) — 生产通常走 SiliconFlow 而非本地 Ollama
   ollama:
@@ -68,7 +71,7 @@ jobai:
 
   # SiliconFlow
   siliconflow:
-    api-key: ${SILICONFLOW_API_KEY}
+    api-key: ${SILICONFLOW_API_KEY:}
     base-url: https://api.siliconflow.cn/v1
     model: BAAI/bge-m3
 

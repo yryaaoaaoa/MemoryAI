@@ -15,6 +15,8 @@ const routes: RouteRecordRaw[] = [
     redirect: '/ask',
     children: [
       { path: 'ask', name: 'AskAI', component: () => import('@/views/ask/AskAI.vue'), meta: { title: 'AI 问答', icon: 'ChatDotRound' } },
+      { path: 'notes', name: 'LearningNotes', component: () => import('@/views/notes/LearningNotes.vue'), meta: { title: '学习笔记' } },
+      { path: 'notes/:id', name: 'LearningNote', component: () => import('@/views/notes/LearningNotes.vue'), meta: { title: '学习笔记' } },
       { path: 'quiz', name: 'Quiz', component: () => import('@/views/quiz/QuizPage.vue'), meta: { title: '刷题', icon: 'EditPen' } },
       { path: 'knowledge', name: 'KnowledgeBase', component: () => import('@/views/knowledge/KnowledgeBase.vue'), meta: { title: '知识库', icon: 'Reading' } },
       { path: 'interview', name: 'Interview', component: () => import('@/views/interview/InterviewPage.vue'), meta: { title: '模拟面试', icon: 'User' } },
@@ -45,6 +47,15 @@ router.beforeEach(async (to) => {
   // Redirect to login if not authenticated (and not already on login/guest page)
   if (!auth.isLoggedIn && !to.meta.guest) {
     return { name: 'Login' }
+  }
+
+  if (auth.isLoggedIn) {
+    const { useFeaturesStore } = await import('@/stores/features.store')
+    const features = useFeaturesStore()
+    await features.load()
+    if (!features.ragEnabled && ['/knowledge', '/admin/knowledge-bases', '/admin/es', '/admin/settings'].some(path => to.path === path || to.path.startsWith(path + '/'))) {
+      return { name: 'AskAI' }
+    }
   }
 
   // Redirect to dashboard if already logged in and trying to access login page

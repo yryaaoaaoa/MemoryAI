@@ -1,0 +1,7 @@
+*
+!app.jar
+!dist/
+!dist/**
+!nginx.conf
+!backend.Dockerfile
+!frontend.Dockerfile

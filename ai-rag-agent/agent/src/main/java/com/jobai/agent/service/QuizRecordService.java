@@ -27,6 +27,11 @@ public class QuizRecordService {
     private final JdbcTemplate jdbc;
     private final ObjectMapper objectMapper;
 
+    public List<String> listTopics(Long userId) {
+        return jdbc.query("SELECT DISTINCT q.topic FROM quiz_record r JOIN quiz_question q ON q.id = r.question_id "
+                + "WHERE r.user_id = ? AND (q.user_id = r.user_id OR q.user_id IS NULL) AND q.topic <> '' ORDER BY q.topic", (rs, rowNum) -> rs.getString(1), userId);
+    }
+
     @Data
     public static class QuizRecordVO {
         private Long id;
@@ -79,7 +84,7 @@ public class QuizRecordService {
         List<Object> countParams = new ArrayList<>();
         countParams.add(userId);
 
-        StringBuilder where = new StringBuilder("WHERE qr.user_id = ?");
+        StringBuilder where = new StringBuilder("WHERE qr.user_id = ? AND (q.user_id = qr.user_id OR q.user_id IS NULL)");
 
         if (topic != null && !topic.isBlank()) {
             where.append(" AND q.topic = ?");
@@ -94,26 +99,19 @@ public class QuizRecordService {
             countParams.add(dateFrom.atStartOfDay());
         }
         if (dateTo != null) {
-            where.append(" AND qr.created_at <= ?");
+            where.append(" AND qr.created_at < ?");
             countParams.add(dateTo.plusDays(1).atStartOfDay());
         }
 
-        long total;
-        try {
-            Long cnt = jdbc.queryForObject(
-                    "SELECT COUNT(*) FROM quiz_record qr JOIN quiz_question q ON q.id = qr.question_id " + where,
-                    Long.class, countParams.toArray());
-            total = cnt != null ? cnt : 0;
-        } catch (Exception e) {
-            log.warn("Count quiz records failed: {}", e.getMessage());
-            return QuizRecordPage.empty(page, size);
-        }
+        long total = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM quiz_record qr JOIN quiz_question q ON q.id = qr.question_id " + where,
+                Long.class, countParams.toArray());
 
         if (total == 0) {
             return QuizRecordPage.empty(page, size);
         }
 
-        int offset = (page - 1) * size;
+        long offset = (long) (page - 1) * size;
         List<Object> queryParams = new ArrayList<>(countParams);
         queryParams.add(size);
         queryParams.add(offset);
@@ -124,7 +122,7 @@ public class QuizRecordService {
                 FROM quiz_record qr
                 JOIN quiz_question q ON q.id = qr.question_id
                 %s
-                ORDER BY qr.created_at DESC
+                ORDER BY qr.created_at DESC, qr.id DESC
                 LIMIT ? OFFSET ?
                 """.formatted(where);
 

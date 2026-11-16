@@ -1,5 +1,12 @@
+-- MySQL 8.0 fresh installation. Existing installations: see migrations/20261022_schema_repair.sql.
 -- 知识库
 CREATE TABLE IF NOT EXISTS knowledge_base (
+    INDEX idx_kb_owner (user_id, is_delete, created_at),
+    user_id BIGINT DEFAULT NULL COMMENT '0=公共，NULL=旧记录归属待确认',
+    created_by BIGINT DEFAULT NULL,
+    updated_by BIGINT DEFAULT NULL,
+    deleted_at DATETIME DEFAULT NULL,
+    deleted_by BIGINT DEFAULT NULL,
     id          BIGINT       AUTO_INCREMENT PRIMARY KEY,
     name        VARCHAR(100)  NOT NULL COMMENT '知识库名称',
     description VARCHAR(500)  DEFAULT '' COMMENT '描述',
@@ -7,10 +14,16 @@ CREATE TABLE IF NOT EXISTS knowledge_base (
     created_at  DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at  DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     is_delete   TINYINT       NOT NULL DEFAULT 0 COMMENT '逻辑删除 0-正常 1-删除'
-) COMMENT '知识库';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT '知识库';
 
 -- 文档
 CREATE TABLE IF NOT EXISTS document (
+    INDEX idx_document_owner (user_id, is_delete),
+    user_id BIGINT DEFAULT NULL,
+    created_by BIGINT DEFAULT NULL,
+    updated_by BIGINT DEFAULT NULL,
+    deleted_at DATETIME DEFAULT NULL,
+    deleted_by BIGINT DEFAULT NULL,
     id            BIGINT       AUTO_INCREMENT PRIMARY KEY,
     kb_id         BIGINT       NOT NULL COMMENT '所属知识库',
     file_name     VARCHAR(255) NOT NULL COMMENT '文件名',
@@ -23,11 +36,16 @@ CREATE TABLE IF NOT EXISTS document (
     created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     is_delete     TINYINT      NOT NULL DEFAULT 0,
-    UNIQUE KEY uk_file_hash (file_hash)
-) COMMENT '文档';
+    UNIQUE KEY uk_document_kb_hash (kb_id, file_hash)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT '文档';
 
 -- 简历（不进入 ES，Agent 直接读 MySQL）
 CREATE TABLE IF NOT EXISTS resume (
+    structured_json LONGTEXT DEFAULT NULL,
+    created_by BIGINT DEFAULT NULL,
+    updated_by BIGINT DEFAULT NULL,
+    deleted_at DATETIME DEFAULT NULL,
+    deleted_by BIGINT DEFAULT NULL,
     id              BIGINT       AUTO_INCREMENT PRIMARY KEY,
     user_id         BIGINT       NOT NULL DEFAULT 0 COMMENT '用户ID',
     file_name       VARCHAR(255) NOT NULL COMMENT '文件名',
@@ -39,11 +57,13 @@ CREATE TABLE IF NOT EXISTS resume (
     retry_count     INT          NOT NULL DEFAULT 0 COMMENT '重试次数',
     created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_file_hash (file_hash)
-) COMMENT '简历';
+    UNIQUE KEY uk_resume_user_hash (user_id, file_hash)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT '简历';
 
 -- 切片
 CREATE TABLE IF NOT EXISTS chunk (
+    INDEX idx_chunk_doc (doc_id),
+    INDEX idx_chunk_kb (kb_id),
     id           BIGINT       AUTO_INCREMENT PRIMARY KEY,
     doc_id       BIGINT       NOT NULL COMMENT '所属文档',
     kb_id        BIGINT       NOT NULL COMMENT '所属知识库',
@@ -53,10 +73,11 @@ CREATE TABLE IF NOT EXISTS chunk (
     token_count  INT          NOT NULL DEFAULT 0 COMMENT 'token 数',
     vector_id    VARCHAR(100) DEFAULT NULL COMMENT 'ES document ID',
     created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
-) COMMENT '文档切片';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT '文档切片';
 
 -- 聊天会话
 CREATE TABLE IF NOT EXISTS chat_session (
+    INDEX idx_chat_owner (user_id, created_at),
     id                    BIGINT       AUTO_INCREMENT PRIMARY KEY,
     title                 VARCHAR(200) NOT NULL DEFAULT '' COMMENT '会话标题',
     kb_ids                VARCHAR(500) NOT NULL DEFAULT '' COMMENT '关联知识库 ID，逗号分隔',
@@ -65,9 +86,10 @@ CREATE TABLE IF NOT EXISTS chat_session (
     total_completion_tokens INT        DEFAULT 0 COMMENT '累计 completion tokens',
     summary               TEXT         DEFAULT NULL COMMENT '历史对话摘要',
     resume_id             BIGINT       DEFAULT NULL COMMENT '关联简历ID',
+    note_id               BIGINT       DEFAULT NULL COMMENT '关联学习笔记ID',
     created_at            DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at            DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-) COMMENT '聊天会话';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT '聊天会话';
 
 -- 聊天消息
 CREATE TABLE IF NOT EXISTS chat_message (
@@ -79,11 +101,13 @@ CREATE TABLE IF NOT EXISTS chat_message (
     metadata     JSON         DEFAULT NULL COMMENT '结构化元数据: tool_calls/tool_call_id/reasoning_content',
     created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_session_order (session_id, message_order)
-) COMMENT '聊天消息';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT '聊天消息';
 
 -- 题目
 CREATE TABLE IF NOT EXISTS quiz_question (
+    INDEX idx_question_kb (kb_id),
     id              BIGINT       AUTO_INCREMENT PRIMARY KEY,
+    user_id         BIGINT       DEFAULT NULL COMMENT '生成者；旧题未知归属保持NULL',
     kb_id           BIGINT       DEFAULT 0 COMMENT '关联知识库',
     doc_id          BIGINT       DEFAULT 0 COMMENT '关联文档',
     topic           VARCHAR(100) NOT NULL DEFAULT '' COMMENT '知识点标签',
@@ -94,21 +118,23 @@ CREATE TABLE IF NOT EXISTS quiz_question (
     explanation     TEXT         DEFAULT NULL COMMENT '解析',
     source_chunk_id BIGINT       DEFAULT 0 COMMENT '来源切片',
     created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
-) COMMENT '题目';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT '题目';
 
 -- 答题记录
 CREATE TABLE IF NOT EXISTS quiz_record (
+    INDEX idx_record_user_question (user_id, question_id, id),
     id              BIGINT       AUTO_INCREMENT PRIMARY KEY,
     user_id         BIGINT       NOT NULL DEFAULT 0,
     question_id     BIGINT       NOT NULL,
     user_answer     TEXT         NOT NULL COMMENT '用户答案',
     is_correct      TINYINT      NOT NULL DEFAULT 0,
+    wrong_removed   TINYINT      NOT NULL DEFAULT 0 COMMENT '已手动移出错题本；不改变答题结果',
     score           INT          NOT NULL DEFAULT 0,
     duration_sec    INT          NOT NULL DEFAULT 0,
     mastery_delta   INT          NOT NULL DEFAULT 0,
     created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_user_topic (user_id, created_at)
-) COMMENT '答题记录';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT '答题记录';
 
 -- 用户掌握度
 CREATE TABLE IF NOT EXISTS user_mastery (
@@ -123,23 +149,38 @@ CREATE TABLE IF NOT EXISTS user_mastery (
     created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uk_user_topic (user_id, topic)
-) COMMENT '用户掌握度';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT '用户掌握度';
 
 -- ============================================================
 -- User table (auth system)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS `user` (
+    role VARCHAR(20) NOT NULL DEFAULT 'user',
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    deleted_at DATETIME DEFAULT NULL,
+    deleted_by BIGINT DEFAULT NULL,
+    is_deleted TINYINT NOT NULL DEFAULT 0,
     id              BIGINT       AUTO_INCREMENT PRIMARY KEY,
     username        VARCHAR(50)  NOT NULL UNIQUE COMMENT '用户名',
     password_hash   VARCHAR(255) NOT NULL COMMENT 'bcrypt 哈希',
     created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_username (username)
-) COMMENT '用户表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT '用户表';
 
 -- ============================================================
 -- Interview session (模拟面试)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS interview_session (
+    INDEX idx_interview_owner (user_id, created_at),
+    user_id BIGINT DEFAULT NULL,
+    created_by BIGINT DEFAULT NULL,
+    updated_by BIGINT DEFAULT NULL,
+    deleted_at DATETIME DEFAULT NULL,
+    deleted_by BIGINT DEFAULT NULL,
+    allocations_json LONGTEXT DEFAULT NULL,
+    resume_text LONGTEXT DEFAULT NULL,
+    skill_snapshot_json LONGTEXT DEFAULT NULL,
+    category_scores_json LONGTEXT DEFAULT NULL,
     id               BIGINT       AUTO_INCREMENT PRIMARY KEY,
     session_id       VARCHAR(36)  NOT NULL UNIQUE COMMENT '会话ID (short UUID)',
     skill_id         VARCHAR(64)  DEFAULT 'java-backend' COMMENT '面试方向',
@@ -164,7 +205,7 @@ CREATE TABLE IF NOT EXISTS interview_session (
     INDEX idx_interview_resume (resume_id, created_at),
     INDEX idx_interview_skill (skill_id, created_at),
     INDEX idx_interview_status (status)
-) COMMENT '模拟面试会话';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT '模拟面试会话';
 
 CREATE TABLE IF NOT EXISTS interview_answer (
     id               BIGINT       AUTO_INCREMENT PRIMARY KEY,
@@ -180,12 +221,36 @@ CREATE TABLE IF NOT EXISTS interview_answer (
     answered_at      DATETIME     DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_answer_session (session_id),
     UNIQUE KEY uk_session_question (session_id, question_index)
-) COMMENT '面试答案';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT '面试答案';
 
--- ============================================================
--- Migration: chat_message metadata support (2026-05-24)
--- For existing databases, run:
---   ALTER TABLE chat_message ADD COLUMN metadata JSON DEFAULT NULL COMMENT '结构化元数据';
---   ALTER TABLE chat_message MODIFY COLUMN role VARCHAR(20) NOT NULL COMMENT 'user/assistant/tool';
--- ============================================================
+-- 每个用户、技术方向一份画像；唯一键供 ON DUPLICATE KEY UPDATE 使用。
+CREATE TABLE IF NOT EXISTS user_skill_profile (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    skill_id VARCHAR(64) NOT NULL,
+    profile_json LONGTEXT NOT NULL,
+    interview_count INT NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_profile_user_skill (user_id, skill_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT '用户技能画像';
 
+CREATE TABLE IF NOT EXISTS learning_note (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    title VARCHAR(120) NOT NULL,
+    confusion TEXT NOT NULL,
+    content MEDIUMTEXT NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    version BIGINT NOT NULL DEFAULT 0,
+    create_request_id VARCHAR(36) DEFAULT NULL,
+    create_request_hash CHAR(64) DEFAULT NULL,
+    source_session_id BIGINT NOT NULL,
+    source_message_ids JSON NOT NULL,
+    source_snapshot JSON NOT NULL,
+    source_ranges JSON DEFAULT NULL COMMENT '历史位置数据，仅为兼容保留，笔记业务不再使用',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_note_owner_status (user_id, status, updated_at),
+    UNIQUE KEY uk_note_create_request (user_id, create_request_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT '学习笔记及原始问答快照';

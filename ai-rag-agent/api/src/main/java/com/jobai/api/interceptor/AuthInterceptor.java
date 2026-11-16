@@ -5,7 +5,6 @@ import com.jobai.infrastructure.entity.User;
 import com.jobai.infrastructure.mapper.UserMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import jakarta.servlet.http.HttpSession;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -15,8 +14,6 @@ import org.springframework.web.servlet.HandlerInterceptor;
 @Slf4j
 @Component
 public class AuthInterceptor implements HandlerInterceptor {
-
-    private static final String SESSION_ROLE_PREFIX = "user_role_";
 
     private final UserMapper userMapper;
 
@@ -43,15 +40,8 @@ public class AuthInterceptor implements HandlerInterceptor {
     }
 
     private String loadRole(HttpServletRequest request, Long userId) {
-        HttpSession session = request.getSession();
-        String cacheKey = SESSION_ROLE_PREFIX + userId;
-        String role = (String) session.getAttribute(cacheKey);
-        if (role != null) return role;
-
         User user = userMapper.selectById(userId);
-        role = user != null && user.getRole() != null ? user.getRole() : "user";
-        session.setAttribute(cacheKey, role);
-        return role;
+        return user != null && user.getRole() != null ? user.getRole() : "user";
     }
 
     @Override

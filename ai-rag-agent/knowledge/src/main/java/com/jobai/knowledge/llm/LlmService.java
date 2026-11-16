@@ -1,7 +1,6 @@
 package com.jobai.knowledge.llm;
 
 import com.jobai.common.JobAiProperties;
-import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
@@ -48,8 +47,11 @@ public class LlmService {
     /**
      * 发送对话补全请求并返回响应文本。
      */
-    @SuppressWarnings("unchecked")
     public String chat(String systemPrompt, String userMessage) {
+        return chat(systemPrompt, userMessage, 4096);
+    }
+
+    public String chat(String systemPrompt, String userMessage, int maxTokens) {
         if (!available) {
             throw new IllegalStateException("LLM not available — API key not configured");
         }
@@ -60,7 +62,7 @@ public class LlmService {
                         Map.of("role", "user", "content", userMessage)
                 ),
                 "temperature", 0.,
-                "max_tokens", 4096
+                "max_tokens", maxTokens
         ));
     }
 
@@ -73,26 +75,37 @@ public class LlmService {
                 .body(Map.class);
 
         if (response == null || response.get("choices") == null) {
-            log.error("LLM returned unexpected response: {}", response);
+            log.error("LLM returned no response or missing choices");
             throw new RuntimeException("LLM response parsing failed");
-        }
-
-        // 记录非流式调用的 token 用量
-        if (response.get("usage") instanceof Map<?, ?> usage) {
-            log.info("[token] model={}, prompt={}, completion={}, total={}",
-                    request.get("model"),
-                    usage.get("prompt_tokens"),
-                    usage.get("completion_tokens"),
-                    usage.get("total_tokens"));
         }
 
         List<Map<String, Object>> choices = (List<Map<String, Object>>) response.get("choices");
         if (choices.isEmpty()) {
             throw new RuntimeException("LLM returned no choices");
         }
+        Object finishReason = choices.get(0).get("finish_reason");
+
+        // Record completion metadata without exposing model output or credentials.
+        if (response.get("usage") instanceof Map<?, ?> usage) {
+            log.info("[token] model={}, prompt={}, completion={}, total={}, finish_reason={}, max_tokens={}",
+                    request.get("model"),
+                    usage.get("prompt_tokens"),
+                    usage.get("completion_tokens"),
+                    usage.get("total_tokens"), finishReason, request.get("max_tokens"));
+        }
+
+        if ("length".equals(finishReason)) {
+            throw new OutputTruncatedException();
+        }
 
         Map<String, Object> message = (Map<String, Object>) choices.get(0).get("message");
         return (String) message.get("content");
+    }
+
+    public static class OutputTruncatedException extends RuntimeException {
+        public OutputTruncatedException() {
+            super("模型输出达到长度上限，内容未生成完整");
+        }
     }
 
     /**

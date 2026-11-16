@@ -16,7 +16,7 @@ export default defineConfig({
         target: 'http://localhost:8080',
         changeOrigin: true,
         configure: (proxy) => {
-          proxy.on('proxyReq', (proxyReq, req) => {
+          proxy.on('proxyReq', (proxyReq) => {
             proxyReq.setHeader('Connection', 'keep-alive')
           })
           proxy.on('proxyRes', (proxyRes, req) => {

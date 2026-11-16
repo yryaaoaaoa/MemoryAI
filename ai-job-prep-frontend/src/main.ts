@@ -8,6 +8,8 @@ import router from './router'
 import { useAuthStore } from './stores/auth.store'
 import './styles/global.scss'
 
+document.documentElement.dataset.theme = localStorage.getItem('theme') === 'light' ? 'light' : 'dark'
+
 const app = createApp(App)
 
 for (const [key, component] of Object.entries(ElementPlusIconsVue)) {

@@ -2,6 +2,7 @@ package com.jobai.api.controller;
 
 import com.jobai.common.JobAiProperties.RetrievalProperties;
 import com.jobai.common.R;
+import com.jobai.common.auth.AuthContext;
 import com.jobai.knowledge.config.RetrievalConfigService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -11,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 @Tag(name = "系统设置")
 @RestController
 @RequiredArgsConstructor
+@com.jobai.common.ConditionalOnRagEnabled
 public class SettingsController {
 
     private final RetrievalConfigService configService;
@@ -19,6 +21,7 @@ public class SettingsController {
     @Operation(summary = "获取检索配置")
     @GetMapping("/api/settings/retrieval")
     public R<RetrievalProperties> getConfig() {
+        AuthContext.requireAdmin();
         RetrievalProperties active = configService.getActiveConfig();
         return R.ok(active != null ? active : defaultConfig);
     }

@@ -15,10 +15,13 @@ import java.util.Map;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class ToolRegistry {
 
     private final KnowledgeRetrievalTool knowledgeRetrievalTool;
+
+    public ToolRegistry(@org.springframework.lang.Nullable KnowledgeRetrievalTool knowledgeRetrievalTool) {
+        this.knowledgeRetrievalTool = knowledgeRetrievalTool;
+    }
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -27,7 +30,7 @@ public class ToolRegistry {
 
     @PostConstruct
     public void init() {
-        register(knowledgeRetrievalTool);
+        if (knowledgeRetrievalTool != null) register(knowledgeRetrievalTool);
         log.info("Agent tool registry initialized with {} tools: {}", tools.size(), tools.keySet());
     }
 
@@ -74,6 +77,7 @@ public class ToolRegistry {
     }
 
     public List<Map<String, Object>> getToolDefinitions() {
+        if (knowledgeRetrievalTool == null) return List.of();
         return List.of(
                 toolDef("knowledgeRetrieval", "搜索知识库获取相关内容。当用户询问具体技术问题时使用",
                         Map.of("query", Map.of("type", "string", "description", "搜索查询，如 'Java 线程池参数'"),

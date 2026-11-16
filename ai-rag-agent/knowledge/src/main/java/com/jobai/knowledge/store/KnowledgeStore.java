@@ -8,6 +8,7 @@ import org.springframework.stereotype.Repository;
 import java.io.IOException;
 
 @Repository
+@com.jobai.common.ConditionalOnRagEnabled
 public class KnowledgeStore {
 
     private static final String INDEX_NAME = "knowledge_chunk";
@@ -20,7 +21,7 @@ public class KnowledgeStore {
 
     public void deleteByDocId(Long documentId) {
         try {
-            client.deleteByQuery(d -> d
+            var result = client.deleteByQuery(d -> d
                     .index(INDEX_NAME)
                     .query(q -> q.term(t -> t
                             .field("doc_id")
@@ -28,6 +29,9 @@ public class KnowledgeStore {
                     ))
                     .refresh(true)
             );
+            if (result.timedOut() || !result.failures().isEmpty()) {
+                throw new BusinessException(ErrorCode.RETRIEVAL_FAILED, "ES 删除未完成，请重试");
+            }
         } catch (IOException e) {
             throw new BusinessException(ErrorCode.RETRIEVAL_FAILED, "ES 删除失败: " + e.getMessage());
         }
@@ -35,7 +39,7 @@ public class KnowledgeStore {
 
     public void deleteByKbId(Long kbId) {
         try {
-            client.deleteByQuery(d -> d
+            var result = client.deleteByQuery(d -> d
                     .index(INDEX_NAME)
                     .query(q -> q.term(t -> t
                             .field("kb_id")
@@ -43,6 +47,9 @@ public class KnowledgeStore {
                     ))
                     .refresh(true)
             );
+            if (result.timedOut() || !result.failures().isEmpty()) {
+                throw new BusinessException(ErrorCode.RETRIEVAL_FAILED, "ES 删除未完成，请重试");
+            }
         } catch (IOException e) {
             throw new BusinessException(ErrorCode.RETRIEVAL_FAILED, "ES 删除失败: " + e.getMessage());
         }

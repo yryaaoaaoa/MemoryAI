@@ -17,6 +17,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/admin/es")
 @RequiredArgsConstructor
+@com.jobai.common.ConditionalOnRagEnabled
 public class EsManageController {
 
     private final EsAdminService esAdminService;

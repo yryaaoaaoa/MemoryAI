@@ -11,6 +11,13 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "jobai")
 public class JobAiProperties {
 
+    private RagProperties rag = new RagProperties();
+
+    @Data
+    public static class RagProperties {
+        private boolean enabled = false;
+    }
+
     private ElasticsearchProperties elasticsearch = new ElasticsearchProperties();
     private EmbeddingProperties embedding = new EmbeddingProperties();
     private OllamaProperties ollama = new OllamaProperties();
@@ -27,6 +34,7 @@ public class JobAiProperties {
         private String scheme = "https";
         private String username = "elastic";
         private String password;
+        private String caCertificate;
     }
 
     @Data

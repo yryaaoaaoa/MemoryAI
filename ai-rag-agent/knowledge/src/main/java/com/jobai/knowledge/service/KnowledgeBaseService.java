@@ -18,11 +18,13 @@ import com.jobai.knowledge.mapper.KnowledgeBaseMapper;
 import com.jobai.knowledge.store.KnowledgeStore;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
 @Service
 @RequiredArgsConstructor
+@com.jobai.common.ConditionalOnRagEnabled
 public class KnowledgeBaseService {
 
     private final KnowledgeBaseMapper knowledgeBaseMapper;
@@ -116,6 +118,7 @@ public class KnowledgeBaseService {
         return kb;
     }
 
+    @Transactional
     public void delete(Long id, Long userId) {
         KnowledgeBase kb = getById(id, userId);
         if (Long.valueOf(0).equals(kb.getUserId())) {

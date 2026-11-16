@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onBeforeUnmount, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { esApi } from '@/api/es.api'
@@ -8,7 +8,8 @@ import type { EsIndexInfo, EsDocumentVO } from '@/types'
 const props = defineProps<{ index: string }>()
 const router = useRouter()
 
-const indexName = decodeURIComponent(props.index)
+const indexName = computed(() => decodeURIComponent(props.index))
+let indexVersion = 0
 
 // --- Index Info ---
 const indexInfo = ref<EsIndexInfo | null>(null)
@@ -25,12 +26,15 @@ const docsPage = ref(1)
 const docsSize = ref(20)
 const docsLoading = ref(false)
 const searchQuery = ref('')
+let docsRequestVersion = 0
 
 // --- Detail Dialog ---
 const detailVisible = ref(false)
 const detailDoc = ref<Record<string, unknown> | null>(null)
 const detailSource = ref('')
 const detailLoading = ref(false)
+let detailRequest = 0
+watch(detailVisible, visible => { if (!visible) ++detailRequest })
 
 const healthColor: Record<string, string> = {
   green: 'success',
@@ -65,30 +69,35 @@ function goBack() {
 
 // --- Fetch Index Info ---
 async function fetchIndexInfo() {
+  const version = indexVersion
   infoLoading.value = true
   try {
-    indexInfo.value = await esApi.getIndexInfo(indexName)
+    const result = await esApi.getIndexInfo(indexName.value)
+    if (version === indexVersion) indexInfo.value = result
   } catch {
-    indexInfo.value = null
+    if (version === indexVersion) indexInfo.value = null
   } finally {
-    infoLoading.value = false
+    if (version === indexVersion) infoLoading.value = false
   }
 }
 
 // --- Fetch Mapping ---
 async function fetchMapping() {
+  const version = indexVersion
   mappingLoading.value = true
   try {
-    mapping.value = await esApi.getMapping(indexName)
+    const result = await esApi.getMapping(indexName.value)
+    if (version === indexVersion) mapping.value = result
   } catch {
-    mapping.value = {}
+    if (version === indexVersion) mapping.value = {}
   } finally {
-    mappingLoading.value = false
+    if (version === indexVersion) mappingLoading.value = false
   }
 }
 
 // --- Fetch Documents ---
 async function fetchDocs() {
+  const version = ++docsRequestVersion
   docsLoading.value = true
   try {
     const params: { page: number; size: number; query?: string } = {
@@ -98,52 +107,64 @@ async function fetchDocs() {
     if (searchQuery.value.trim()) {
       params.query = searchQuery.value.trim()
     }
-    const result = await esApi.listDocs(indexName, params)
+    const result = await esApi.listDocs(indexName.value, params)
+    if (version !== docsRequestVersion) return
     docs.value = result.records
     docsTotal.value = result.total
   } catch {
+    if (version !== docsRequestVersion) return
     docs.value = []
     docsTotal.value = 0
   } finally {
-    docsLoading.value = false
+    if (version === docsRequestVersion) docsLoading.value = false
   }
 }
 
-function onPageChange(page: number) {
-  docsPage.value = page
-  fetchDocs()
+function onSizeChange(size: number) {
+  docsSize.value = size
+  docsPage.value = 1
 }
 
+onBeforeUnmount(() => { ++docsRequestVersion; ++detailRequest; ++indexVersion })
+
 function onSearch() {
-  docsPage.value = 1
-  fetchDocs()
+  if (docsPage.value !== 1) docsPage.value = 1
+  else void fetchDocs()
 }
 
 // --- Detail Dialog ---
 async function openDetail(doc: EsDocumentVO) {
+  const request = ++detailRequest
+  detailDoc.value = null
+  detailSource.value = ''
   detailLoading.value = true
   detailVisible.value = true
   try {
-    const full = await esApi.getDoc(indexName, doc.id)
+    const full = await esApi.getDoc(indexName.value, doc.id)
+    if (request !== detailRequest) return
     detailDoc.value = full
     detailSource.value = JSON.stringify(full, null, 2)
   } catch {
-    detailDoc.value = null
-    detailSource.value = '加载失败'
+    if (request === detailRequest) {
+      detailDoc.value = null
+      detailSource.value = '加载失败'
+    }
   } finally {
-    detailLoading.value = false
+    if (request === detailRequest) detailLoading.value = false
   }
 }
 
 // --- Delete Document ---
 async function handleDeleteDoc(doc: EsDocumentVO) {
+  const target = indexName.value
   try {
     await ElMessageBox.confirm(
       `确定要删除文档「${doc.id}」吗？`,
       '删除文档',
       { confirmButtonText: '确认删除', cancelButtonText: '取消', type: 'warning' },
     )
-    await esApi.deleteDoc(indexName, doc.id)
+    if (target !== indexName.value) return
+    await esApi.deleteDoc(target, doc.id)
     ElMessage.success('文档已删除')
     await fetchDocs()
   } catch {
@@ -153,9 +174,10 @@ async function handleDeleteDoc(doc: EsDocumentVO) {
 
 // --- Clear All Documents ---
 async function handleClearDocs() {
+  const target = indexName.value
   try {
     await ElMessageBox.confirm(
-      `确定要清空索引「${indexName}」的所有文档吗？\n索引本身会保留，但全部 ${docsTotal} 条文档将被删除且不可恢复。`,
+      `确定要清空索引「${indexName.value}」的所有文档吗？\n索引本身会保留，但全部 ${docsTotal.value} 条文档将被删除且不可恢复。`,
       '清空文档',
       {
         confirmButtonText: '确认清空',
@@ -164,7 +186,8 @@ async function handleClearDocs() {
         confirmButtonClass: 'el-button--danger',
       },
     )
-    const deleted = await esApi.deleteByQuery(indexName, '*')
+    if (target !== indexName.value) return
+    const deleted = await esApi.deleteByQuery(target, '*')
     ElMessage.success(`已删除 ${deleted} 条文档`)
     await fetchDocs()
     await fetchIndexInfo()
@@ -175,9 +198,10 @@ async function handleClearDocs() {
 
 // --- Delete Entire Index ---
 async function handleDeleteIndex() {
+  const target = indexName.value
   try {
     await ElMessageBox.confirm(
-      `确定要删除整个索引「${indexName}」吗？\n该操作将删除索引内所有数据，且不可恢复。`,
+      `确定要删除整个索引「${indexName.value}」吗？\n该操作将删除索引内所有数据，且不可恢复。`,
       '删除索引',
       {
         confirmButtonText: '确认删除',
@@ -186,7 +210,8 @@ async function handleDeleteIndex() {
         confirmButtonClass: 'el-button--danger',
       },
     )
-    await esApi.deleteIndex(indexName)
+    if (target !== indexName.value) return
+    await esApi.deleteIndex(target)
     ElMessage.success('索引已删除')
     router.push('/admin/es')
   } catch {
@@ -194,11 +219,21 @@ async function handleDeleteIndex() {
   }
 }
 
-onMounted(() => {
-  fetchIndexInfo()
-  fetchMapping()
-  fetchDocs()
-})
+watch(indexName, () => {
+  ++indexVersion
+  ++docsRequestVersion
+  ++detailRequest
+  docsPage.value = 1
+  docs.value = []
+  docsTotal.value = 0
+  searchQuery.value = ''
+  detailVisible.value = false
+  mapping.value = {}
+  indexInfo.value = null
+  void fetchIndexInfo()
+  void fetchMapping()
+}, { immediate: true })
+watch([indexName, docsPage, docsSize], () => { void fetchDocs() }, { immediate: true, flush: 'post' })
 </script>
 
 <template>
@@ -324,8 +359,7 @@ onMounted(() => {
           :total="docsTotal"
           :page-sizes="[10, 20, 50, 100]"
           layout="total, sizes, prev, pager, next"
-          @current-change="onPageChange"
-          @size-change="onPageChange"
+          @size-change="onSizeChange"
         />
       </div>
     </el-card>
@@ -359,7 +393,7 @@ onMounted(() => {
 }
 
 .stats-text {
-  color: #909399;
+  color: var(--text-dim);
   font-size: 13px;
 }
 
@@ -374,7 +408,7 @@ onMounted(() => {
 }
 
 .field-name {
-  background: #f5f7fa;
+  background: var(--bg-elevated);
   padding: 2px 6px;
   border-radius: 3px;
   font-size: 13px;
@@ -382,13 +416,13 @@ onMounted(() => {
 
 .doc-id {
   font-size: 12px;
-  color: #606266;
+  color: var(--text-mut);
 }
 
 .doc-preview {
   font-size: 13px;
   line-height: 1.5;
-  color: #303133;
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   display: -webkit-box;
@@ -418,7 +452,7 @@ onMounted(() => {
 
 .heading-path {
   font-size: 12px;
-  color: #909399;
+  color: var(--text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -435,7 +469,7 @@ onMounted(() => {
 
 .emb-preview {
   font-size: 11px;
-  color: #909399;
+  color: var(--text-dim);
   font-family: monospace;
 }
 

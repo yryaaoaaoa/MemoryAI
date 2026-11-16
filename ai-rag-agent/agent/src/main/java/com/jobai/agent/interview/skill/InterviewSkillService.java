@@ -428,7 +428,24 @@ public class InterviewSkillService {
     }
 
     public String buildEvaluationReferenceSection(String skillId) {
-        SkillDTO skill = getSkill(skillId);
+        return buildEvaluationReferenceSection(getSkill(skillId));
+    }
+
+    public SkillDTO getSessionSkill(String skillId, String snapshotJson) {
+        if (snapshotJson != null && !snapshotJson.isBlank()) {
+            try {
+                return objectMapper.readValue(snapshotJson, SkillDTO.class);
+            } catch (IOException e) {
+                throw new BusinessException(ErrorCode.INTERNAL_ERROR, "面试方向快照无法读取");
+            }
+        }
+        if (CUSTOM_SKILL_ID.equals(skillId)) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "旧版自定义面试缺少 JD 方向快照，请重新创建面试");
+        }
+        return getSkill(skillId);
+    }
+
+    public String buildEvaluationReferenceSection(SkillDTO skill) {
         StringBuilder sb = new StringBuilder();
         for (SkillCategoryDTO category : skill.categories()) {
             if (category.ref() == null || category.ref().isBlank()) continue;
@@ -452,8 +469,12 @@ public class InterviewSkillService {
      */
     public String buildCategoryReference(String skillId, String categoryKey) {
         if (skillId == null || categoryKey == null) return "";
+        return buildCategoryReference(getSkill(skillId), categoryKey);
+    }
+
+    public String buildCategoryReference(SkillDTO skill, String categoryKey) {
+        if (categoryKey == null) return "";
         try {
-            SkillDTO skill = getSkill(skillId);
             for (SkillCategoryDTO cat : skill.categories()) {
                 if (categoryKey.equals(cat.key()) && cat.ref() != null && !cat.ref().isBlank()) {
                     String content = loadReference(cat.ref(), cat.shared(), skill.id());
@@ -463,7 +484,7 @@ public class InterviewSkillService {
                 }
             }
         } catch (Exception e) {
-            log.warn("Failed to load category reference: skillId={}, category={}", skillId, categoryKey, e.getMessage());
+            log.warn("Failed to load category reference: skillId={}, category={}", skill.id(), categoryKey, e.getMessage());
         }
         return "";
     }
