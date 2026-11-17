@@ -31,7 +31,7 @@ class RagKnowledgeToggleTest {
 
     private MockMvc mvc(StreamingChatService streaming) {
         SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken("1", null, List.of()));
-        return MockMvcBuilders.standaloneSetup(new RagController(sessions, mock(QuizService.class), streaming, notes))
+        return MockMvcBuilders.standaloneSetup(new RagController(sessions, mock(QuizService.class), streaming, notes, mock(com.jobai.rag.service.LearningTreeService.class)))
                 .setCustomArgumentResolvers(new CurrentUserIdArgumentResolver())
                 .setControllerAdvice(new GlobalExceptionHandler()).build();
     }

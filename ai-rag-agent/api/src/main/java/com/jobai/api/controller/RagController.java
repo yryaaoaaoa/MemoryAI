@@ -10,6 +10,7 @@ import com.jobai.rag.entity.ChatMessage;
 import com.jobai.rag.entity.ChatSession;
 import com.jobai.rag.service.ChatSessionService;
 import com.jobai.rag.service.LearningNoteService;
+import com.jobai.rag.service.LearningTreeService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.Data;
@@ -35,6 +36,7 @@ public class RagController {
     private final QuizService quizService;
     private final StreamingChatService streamingChatService;
     private final LearningNoteService learningNoteService;
+    private final LearningTreeService learningTreeService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     // ==================== 会话 ====================
@@ -57,6 +59,16 @@ public class RagController {
     @GetMapping("/api/sessions/{id}/messages")
     public R<List<ChatMessage>> getMessages(@CurrentUserId Long userId, @PathVariable Long id) {
         return R.ok(chatSessionService.getMessages(id, userId));
+    }
+
+    @GetMapping("/api/sessions/{id}/learning-tree")
+    public R<LearningTreeService.TreeState> learningTree(@CurrentUserId Long userId, @PathVariable Long id) {
+        return R.ok(learningTreeService.state(id, userId));
+    }
+
+    @PostMapping("/api/sessions/{id}/learning-tree/retry")
+    public R<LearningTreeService.TreeState> retryLearningTree(@CurrentUserId Long userId, @PathVariable Long id) {
+        return R.ok(learningTreeService.retry(id, userId));
     }
 
     @Data
@@ -101,6 +113,14 @@ public class RagController {
         if (body.containsKey("useKnowledgeBase") && !(knowledgeBaseOption instanceof Boolean))
             throw new IllegalArgumentException("useKnowledgeBase 必须为布尔值 true 或 false");
         boolean useKnowledgeBase = Boolean.TRUE.equals(knowledgeBaseOption);
+        Object organizeOption = body.get("organizeNotes");
+        if (body.containsKey("organizeNotes") && !(organizeOption instanceof Boolean))
+            throw new IllegalArgumentException("organizeNotes 必须为布尔值 true 或 false");
+        boolean organizeNotes = Boolean.TRUE.equals(organizeOption);
+        Object nodeOption = body.get("noteNodeId");
+        if (nodeOption != null && (!(nodeOption instanceof String node) || node.isBlank() || node.length() > 128))
+            throw new IllegalArgumentException("知识点编号无效");
+        String noteNodeId = (String) nodeOption;
         if (useKnowledgeBase) streamingChatService.requireKnowledgeBaseAvailable();
         SseEmitter emitter = new SseEmitter(300_000L);
         String message = (String) body.getOrDefault("message", "");
@@ -114,17 +134,24 @@ public class RagController {
         Integer replyOrder = null;
         if (sid != null) {
             sessionId = Long.valueOf(sid.toString());
+            String noteContext = noteNodeId == null ? learningNoteService.contextForSession(sessionId, userId)
+                    : learningNoteService.contextForSession(sessionId, userId, noteNodeId);
             ChatSessionService.ChatContext ctx = chatSessionService.beginUserTurn(sessionId, userId, message);
             replyOrder = ctx.replyOrder();
             for (ChatMessage msg : ctx.windowMessages()) {
                 history.add(buildHistoryMessage(msg));
             }
             summariesText = ctx.summariesText();
-            summariesText += learningNoteService.contextForSession(sessionId, userId);
+            summariesText += noteContext;
             resumeText = ctx.resumeText();
         }
 
-        streamingChatService.streamChat(message, history, emitter, sessionId, userId, summariesText, resumeText, replyOrder, useKnowledgeBase);
+        var response = streamingChatService.streamChat(message, history, emitter, sessionId, userId, summariesText, resumeText, replyOrder, useKnowledgeBase);
+        if (organizeNotes && sessionId != null) {
+            Long currentSession = sessionId;
+            int currentReply = replyOrder;
+            response.thenRun(() -> learningTreeService.afterReply(currentSession, userId, currentReply, noteNodeId));
+        }
         return emitter;
     }
 

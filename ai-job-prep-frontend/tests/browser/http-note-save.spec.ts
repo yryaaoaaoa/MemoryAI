@@ -22,6 +22,7 @@ test('HTTP origin without randomUUID can create notes, retry with the same reque
     if (path === '/api/features') return ok({ ragEnabled: true })
     if (path === '/api/sessions') return ok([{ id: 10, title: '线程池学习' }])
     if (path === '/api/sessions/10/messages') return ok(source)
+    if (path === '/api/sessions/10/learning-tree') return ok({ note: null, status: 'idle', nodeId: null, messageId: null, error: null })
     if (path === '/api/learning-notes' && route.request().method() === 'POST') {
       const body = route.request().postDataJSON(); creates.push(body)
       if (failSave) return route.fulfill({ status: 503, json: { code: 503, message: '测试重试' } })
@@ -38,6 +39,7 @@ test('HTTP origin without randomUUID can create notes, retry with the same reque
   await page.goto('http://memoryai.test/ask?sessionId=10')
   expect(await page.evaluate(() => ({ secure: isSecureContext, uuid: typeof crypto.randomUUID, random: typeof crypto.getRandomValues })))
     .toEqual({ secure: false, uuid: 'undefined', random: 'function' })
+  await page.locator('.note-message-actions summary').click()
   await page.getByRole('button', { name: '存为学习笔记', exact: true }).click()
   const drawer = page.getByRole('dialog', { name: '存为学习笔记', exact: true })
   await expect(drawer.getByLabel('笔记正文')).toHaveValue(/先创建核心线程/)

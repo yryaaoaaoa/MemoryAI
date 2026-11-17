@@ -29,6 +29,7 @@ async function setup(page: Page, content = formulas) {
     if (path === '/api/sessions') return ok([{ id: 10, title: '数学推导' }])
     if (path === '/api/chat/session') return ok(10)
     if (path === '/api/sessions/10/messages') return ok(messages)
+    if (path === '/api/sessions/10/learning-tree') return ok({ note: null, status: 'unchanged', nodeId: null, messageId: 4, error: null })
     if (path === '/api/learning-notes') return ok({ records: Object.values(notes), total: 2 })
     const id = Number(path.match(/^\/api\/learning-notes\/(\d+)$/)?.[1])
     if (notes[id]) {

@@ -146,7 +146,7 @@ button.sb-link:hover { background: var(--bg-hover); }
   .main { padding: 24px; }
 }
 @media (max-width: 768px) {
-  .sb { position: absolute; inset: 0 auto 0 0; z-index: 30; background: var(--bg-panel); }
+  .sb { position: absolute; inset: 0 auto 0 0; z-index: 30; background: var(--bg-panel); transition: none; }
   .sb-brand { margin-bottom: 20px; }
   .main { margin-left: 52px; padding: 16px; }
   .nav-backdrop { display: block; position: absolute; inset: 0 0 0 52px; z-index: 20; border: none; background: rgba(0,0,0,.35); }

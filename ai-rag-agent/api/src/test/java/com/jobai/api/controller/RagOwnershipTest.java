@@ -31,7 +31,7 @@ class RagOwnershipTest {
                 .thenThrow(new BusinessException(ErrorCode.FORBIDDEN));
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken("1", null, List.of()));
-        var mvc = MockMvcBuilders.standaloneSetup(new RagController(sessions, mock(QuizService.class), streaming, mock(LearningNoteService.class)))
+        var mvc = MockMvcBuilders.standaloneSetup(new RagController(sessions, mock(QuizService.class), streaming, mock(LearningNoteService.class), mock(com.jobai.rag.service.LearningTreeService.class)))
                 .setCustomArgumentResolvers(new CurrentUserIdArgumentResolver())
                 .setControllerAdvice(new GlobalExceptionHandler()).build();
         mvc.perform(post("/api/agent/chat/stream").contentType("application/json")

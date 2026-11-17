@@ -3,7 +3,9 @@ import { ref, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
 import { confirmNoteLeave } from '@/utils/note-leave-guard'
 import NoteEditor from '@/components/notes/NoteEditor.vue'
-import { notesApi, type LearningNote, type SourceMessage } from '@/api/learning-notes.api'
+import LearningTreePanel from '@/components/notes/LearningTreePanel.vue'
+import { notesApi, type LearningNote, type LearningTreeState, type SourceMessage } from '@/api/learning-notes.api'
+import type { KnowledgeNode } from '@/utils/knowledge-tree'
 import { useFeaturesStore } from '@/stores/features.store'
 import { useAuthStore } from '@/stores/auth.store'
 import { ElMessage } from 'element-plus'
@@ -30,6 +32,17 @@ const features = useFeaturesStore()
 const linkedNote = ref<LearningNote | null>(null)
 const noteEditor = ref<{ messages: SourceMessage[]; selectedIds: number[]; note?: LearningNote } | null>(null)
 const preparingNote = ref(false)
+const treeOpen = ref(true)
+const automaticNotes = ref(true)
+const treeState = ref<LearningTreeState>({ note: null, status: 'idle', nodeId: null, messageId: null, error: null })
+const treeRetrying = ref(false)
+const treeLoadFailed = ref(false)
+const discussionNode = ref<Pick<KnowledgeNode, 'id' | 'title'> | null>(null)
+const inputArea = ref<HTMLTextAreaElement>()
+let treeTimer: ReturnType<typeof setTimeout> | undefined
+let treeRequestVersion = 0
+let expectedTreeMessageId: number | undefined
+let treePollStarted = 0
 
 const inputText = ref('')
 const useKnowledgeBase = ref(false)
@@ -53,6 +66,79 @@ const resumeList = ref<Resume[]>([])
 const sessionResumeId = ref<number | null>(null)
 const auth = useAuthStore()
 const sessionStorageKey = () => `rag_session_id:${auth.userId}`
+const automaticNotesKey = () => `learning_tree_enabled:${auth.userId}`
+
+function stopTreePolling() {
+  clearTimeout(treeTimer)
+  treeTimer = undefined
+  ++treeRequestVersion
+}
+
+async function refreshLearningTree(expectedMessageId?: number) {
+  if (!sessionId.value) return
+  stopTreePolling()
+  const requestVersion = treeRequestVersion
+  const version = sessionVersion
+  const id = sessionId.value
+  if (expectedMessageId) {
+    expectedTreeMessageId = Math.max(expectedTreeMessageId || 0, expectedMessageId)
+    treePollStarted = Date.now()
+    treeState.value = { ...treeState.value, status: 'pending', error: null }
+  }
+  try {
+    const state = await notesApi.learningTree(id)
+    if (version !== sessionVersion || requestVersion !== treeRequestVersion) return
+    linkedNote.value = state.note
+    treeLoadFailed.value = false
+    const awaitingReply = !!expectedTreeMessageId && (state.messageId ?? 0) < expectedTreeMessageId && state.status !== 'failed'
+    if (!awaitingReply) expectedTreeMessageId = undefined
+    treeState.value = awaitingReply ? { ...state, status: 'pending' } : state
+    if (treeState.value.status === 'pending') {
+      if (!treePollStarted) treePollStarted = Date.now()
+      if (Date.now() - treePollStarted < 180_000) {
+        treeTimer = setTimeout(() => { void refreshLearningTree() }, 1500)
+      } else {
+        treeLoadFailed.value = true
+        treeState.value = { ...state, status: 'failed', error: '暂未取得整理结果，可以稍后重试。问答已保留。' }
+      }
+    } else treePollStarted = 0
+  } catch {
+    if (version !== sessionVersion || requestVersion !== treeRequestVersion) return
+    treeLoadFailed.value = true
+    treeState.value = { ...treeState.value, status: 'failed', error: '无法读取学习树，请重试。聊天可以继续。' }
+  }
+}
+
+async function retryLearningTree() {
+  if (!sessionId.value || treeRetrying.value) return
+  stopTreePolling()
+  const version = sessionVersion
+  treeRetrying.value = true
+  treePollStarted = Date.now()
+  try {
+    if (!treeLoadFailed.value) {
+      const state = await notesApi.retryLearningTree(sessionId.value)
+      if (version !== sessionVersion) return
+      treeState.value = state
+      linkedNote.value = state.note
+    }
+    if (version === sessionVersion) await refreshLearningTree()
+  } catch {
+    if (version === sessionVersion) treeState.value = { ...treeState.value, status: 'failed', error: '无法重新整理，请稍后重试。' }
+  } finally {
+    if (version === sessionVersion) treeRetrying.value = false
+  }
+}
+
+function toggleAutomaticNotes() {
+  automaticNotes.value = !automaticNotes.value
+  localStorage.setItem(automaticNotesKey(), String(automaticNotes.value))
+}
+
+function continueFromNode(node: KnowledgeNode) {
+  discussionNode.value = { id: node.id, title: node.title }
+  inputArea.value?.focus()
+}
 
 async function loadResumes() {
   try {
@@ -78,6 +164,7 @@ async function setSessionResume(resumeId: number | null) {
 const placeholder = '输入问题，开始对话…'
 
 onMounted(async () => {
+  automaticNotes.value = localStorage.getItem(automaticNotesKey()) !== 'false'
   void loadResumes()
   const saved = route.query.sessionId || localStorage.getItem(sessionStorageKey())
   if (saved && Number.isSafeInteger(Number(saved)) && Number(saved) > 0) await switchSession(Number(saved))
@@ -100,12 +187,7 @@ async function switchSession(id: number) {
     showHot.value = messages.value.length === 0
     const session = all.find((s: any) => s.id === id)
     sessionResumeId.value = session?.resumeId ?? null
-    if (session?.noteId) {
-      try {
-        const note = await notesApi.get(session.noteId)
-        if (version === sessionVersion) linkedNote.value = note
-      } catch { /* The note may have been deleted; the conversation remains available. */ }
-    }
+    void refreshLearningTree()
     if (version === sessionVersion) {
       if (String(route.query.sessionId) !== String(id)) await router.replace({ path: '/ask', query: { sessionId: id } })
       await focusSourceMessage()
@@ -119,6 +201,13 @@ async function switchSession(id: number) {
 
 function beginSessionChange() {
   stopStreaming()
+  stopTreePolling()
+  expectedTreeMessageId = undefined
+  treePollStarted = 0
+  treeState.value = { note: null, status: 'idle', nodeId: null, messageId: null, error: null }
+  treeRetrying.value = false
+  treeLoadFailed.value = false
+  discussionNode.value = null
   useKnowledgeBase.value = false
   sessionLoading.value = true
   sessionError.value = ''
@@ -155,6 +244,11 @@ async function newSession(notify = true) {
 async function send() {
   const text = inputText.value.trim()
   if (!text || loading.value || sessionLoading.value || sessionError.value || !sessionId.value) return
+  const version = sessionVersion
+  const id = sessionId.value
+  const organizeNotes = automaticNotes.value
+  const noteNodeId = discussionNode.value?.id
+  discussionNode.value = null
   showHot.value = false
   messages.value.push({ role: 'user', content: text })
   inputText.value = ''
@@ -174,7 +268,8 @@ async function send() {
     timeoutId = setTimeout(() => controller.abort(), 270_000)
     await connectSSE(
       '/api/agent/chat/stream',
-      { message: text, sessionId: sessionId.value, useKnowledgeBase: features.ragEnabled && useKnowledgeBase.value },
+      { message: text, sessionId: id, useKnowledgeBase: features.ragEnabled && useKnowledgeBase.value, organizeNotes,
+        ...(noteNodeId ? { noteNodeId } : {}) },
       {
         onToken(content) {
           assistantMessage.content += content
@@ -218,6 +313,7 @@ async function send() {
           if (assistantMessage.content.length === 0 && !assistantMessage.toolCalls?.length) {
             assistantMessage.content = '（助手未返回内容，请重试）'
           }
+          if (organizeNotes && version === sessionVersion) void refreshLearningTree(assistantMessage.id)
         },
         onError(err: Error) {
           clearTimeout(timeoutId)
@@ -265,7 +361,7 @@ function stopStreaming() {
   loading.value = false
 }
 
-onBeforeUnmount(() => { ++sessionVersion; stopStreaming() })
+onBeforeUnmount(() => { ++sessionVersion; stopStreaming(); stopTreePolling() })
 onBeforeRouteLeave(() => confirmNoteLeave())
 onBeforeRouteUpdate(async (to, from) => {
   if (to.query.sessionId === from.query.sessionId) return true
@@ -345,13 +441,41 @@ async function openNote(index: number, update = false) {
 function noteSaved(note: LearningNote) {
   if (linkedNote.value?.id === note.id) linkedNote.value = note
   noteEditor.value = null
+  void refreshLearningTree()
+}
+
+async function editLearningNote() {
+  if (!sessionId.value || !linkedNote.value || preparingNote.value || loading.value) return
+  const version = sessionVersion
+  preparingNote.value = true
+  try {
+    const [note, stored] = await Promise.all([notesApi.get(linkedNote.value.id), ragApi.getMessages(sessionId.value)])
+    if (version !== sessionVersion) return
+    linkedNote.value = note
+    noteEditor.value = {
+      note, selectedIds: [],
+      messages: displayMessages(stored)
+        .filter((message): message is ChatMessage & { id: number } => !!message.id && !!message.content &&
+          (message.role === 'user' || !message.status || message.status === 'completed'))
+        .map(message => ({ id: message.id, role: message.role, content: message.content })),
+    }
+  } catch {
+    // The request interceptor reports the failure; the current tree stays readable.
+  } finally {
+    if (version === sessionVersion) preparingNote.value = false
+  }
+}
+
+function closeNoteEditor() {
+  noteEditor.value = null
+  void refreshLearningTree()
 }
 
 </script>
 
 <template>
   <div class="ask-layout">
-    <NoteEditor v-if="noteEditor && sessionId" :session-id="sessionId" :messages="noteEditor.messages" :selected-ids="noteEditor.selectedIds" :note="noteEditor.note" @close="noteEditor = null" @saved="noteSaved" />
+    <NoteEditor v-if="noteEditor && sessionId" :session-id="sessionId" :messages="noteEditor.messages" :selected-ids="noteEditor.selectedIds" :note="noteEditor.note" @close="closeNoteEditor" @saved="noteSaved" />
     <!-- Resume sidebar -->
     <div v-if="sidebarOpen" class="ask-sidebar" @keydown.esc="sidebarOpen = false">
       <div class="sb-hdr">
@@ -397,6 +521,7 @@ function noteSaved(note: LearningNote) {
           <span v-if="lastUsage" class="sess-usage" title="本次对话累计消耗 token 数">↑{{ lastUsage.prompt }} ↓{{ lastUsage.completion }} = {{ lastUsage.total }}</span>
           <button class="sess-btn" @click="loadSessions">切换</button>
           <button class="sess-btn sess-new" @click="newSession()">+ 新对话</button>
+          <button class="sess-btn tree-toggle" :aria-expanded="treeOpen" @click="treeOpen = !treeOpen">{{ treeOpen ? '收起学习树' : '学习树' }}</button>
         </div>
       </div>
 
@@ -420,8 +545,8 @@ function noteSaved(note: LearningNote) {
         <button class="sess-btn" @click="sessionId ? switchSession(sessionId) : newSession(false)">重试</button>
       </div>
       <div v-else-if="showHot" class="hot-zone">
-        <h2 class="hot-h2">Agent 问答</h2>
-        <p class="hot-p">{{ features.ragEnabled ? '提问、查阅参考资料，把值得再学的内容留下来' : '提问、追问，把值得再学的内容留下来' }}</p>
+        <h2 class="hot-h2">今天想弄懂什么？</h2>
+        <p class="hot-p">{{ automaticNotes ? '顺着问题聊下去，知识会逐步整理到学习树里。' : '提问、追问，把没弄懂的地方讲清楚。' }}</p>
         <div class="hot-q">
           <button v-for="q in (['什么是 CAP 定理','ThreadLocal 内存泄漏','MyBatis 一二级缓存','Spring 循环依赖'])" :key="q"
             class="hq-item" @click="inputText = q; send()">{{ q }}</button>
@@ -437,10 +562,13 @@ function noteSaved(note: LearningNote) {
             <div v-if="msg.content" class="msg-bub" v-html="md(msg.content)"></div>
             <div v-else-if="msg.role === 'assistant' && i === messages.length - 1 && loading" class="think-dots" role="status" aria-label="正在生成回答"><span></span><span></span><span></span></div>
 
-            <div v-if="msg.role === 'assistant' && msg.content && (!msg.status || msg.status === 'completed') && !loading" class="note-message-actions">
-              <button class="sess-btn" :disabled="preparingNote || sessionLoading" @click="openNote(i)">存为学习笔记</button>
-              <button v-if="linkedNote" class="sess-btn" :disabled="preparingNote || sessionLoading" @click="openNote(i, true)">更新这条笔记</button>
-            </div>
+            <details v-if="msg.role === 'assistant' && msg.content && (!msg.status || msg.status === 'completed') && !loading" class="note-message-actions">
+              <summary>手动整理</summary>
+              <div>
+                <button class="sess-btn" :disabled="preparingNote || sessionLoading" @click="openNote(i)">存为学习笔记</button>
+                <button v-if="linkedNote" class="sess-btn" :disabled="preparingNote || sessionLoading" @click="openNote(i, true)">更新这条笔记</button>
+              </div>
+            </details>
             <!-- Tool calls -->
             <div v-if="msg.toolCalls?.length" class="tcs">
               <div v-for="(tc, tci) in msg.toolCalls" :key="tci" :class="['tcs-i', tc.status]">
@@ -459,15 +587,27 @@ function noteSaved(note: LearningNote) {
 
       <!-- Input -->
       <div class="inp-bar">
-        <div v-if="features.ragEnabled" class="inp-options">
-          <button type="button" class="retrieval-toggle" role="switch" aria-label="知识库检索" :aria-checked="useKnowledgeBase"
+        <div v-if="discussionNode" class="discussion-context">
+          <span>继续讨论 · {{ discussionNode.title }}</span>
+          <button aria-label="取消指定知识点" @click="discussionNode = null">×</button>
+        </div>
+        <div class="inp-options">
+          <button type="button" class="retrieval-toggle" role="switch" aria-label="自动整理" :aria-checked="automaticNotes"
+            :disabled="loading || sessionLoading || !!sessionError || !sessionId" @click="toggleAutomaticNotes">
+            <span class="retrieval-track" aria-hidden="true"><span></span></span>
+            <span>自动整理</span>
+          </button>
+          <button v-if="features.ragEnabled" type="button" class="retrieval-toggle" role="switch" aria-label="知识库检索" :aria-checked="useKnowledgeBase"
             :disabled="loading || sessionLoading || !!sessionError || !sessionId" @click="useKnowledgeBase = !useKnowledgeBase">
             <span class="retrieval-track" aria-hidden="true"><span></span></span>
             <span>知识库检索</span>
           </button>
+          <span v-if="treeState.status === 'pending' && !treeOpen" class="tree-inline-status" role="status">正在整理，可继续聊天</span>
+          <button v-else-if="treeState.status === 'failed' && !treeOpen" class="tree-inline-error" @click="treeOpen = true">学习树尚未更新 · 查看</button>
         </div>
         <div class="inp-pill">
           <textarea
+            ref="inputArea"
             v-model="inputText"
             :placeholder="placeholder"
             class="inp-text"
@@ -482,27 +622,33 @@ function noteSaved(note: LearningNote) {
         </div>
       </div>
     </div>
+    <LearningTreePanel v-show="treeOpen" :key="sessionId" :note="linkedNote" :status="treeState.status"
+      :updated-node-id="treeState.nodeId" :error="treeState.error" :automatic="automaticNotes" :busy="treeRetrying"
+      :editing-disabled="preparingNote || loading || sessionLoading || !!sessionError"
+      @close="treeOpen = false" @retry="retryLearningTree" @edit="editLearningNote" @continue="continueFromNode" />
   </div>
 </template>
 
 <style scoped>
 .linked-note { padding: 10px 0 16px; color: var(--text-mut); font-size: 13px; overflow-wrap: anywhere; }
 .linked-note a { color: var(--accent); text-decoration: none; }
-.note-message-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+.note-message-actions { margin: 8px 0; color: var(--text-mut); font-size: 11px; }
+.note-message-actions summary { cursor: pointer; width: fit-content; }
+.note-message-actions>div { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .msg:target { outline: 1px solid var(--accent); }
 
 .response-status { margin-top: 8px; color: var(--text-mut); font-size: 13px; }
-.ask-layout { display: flex; height: 100%; position: relative; }
+.ask-layout { display: flex; height: 100%; min-height: 0; position: relative; }
 
 .ask {
-  flex: 1; display: flex; flex-direction: column; min-width: 0;
+  flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0;
   padding: 24px 32px 20px;
 }
 
 /* ====== Top ====== */
-.ask-top { display: flex; justify-content: space-between; align-items: center; padding-bottom: 18px; }
+.ask-top { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; align-items: center; padding-bottom: 18px; }
 .ask-title { font-weight: 700; font-size: 15px; font-family: var(--font-display); }
-.sess-group { display: flex; gap: 6px; align-items: center; }
+.sess-group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .sess-id { font-size: 11px; color: var(--text-dim); font-feature-settings: "tnum"; font-family: var(--font-mono); }
 .sess-usage { font-size: 10px; color: var(--text-dim); font-feature-settings: "tnum"; font-family: var(--font-mono); }
 .sess-btn { border: 1px solid var(--border); background: var(--bg-glass); color: var(--text-mut); padding: 4px 10px; border-radius: 6px; font-size: 11px; cursor: pointer; font-family: var(--font); backdrop-filter: blur(8px); transition: all 0.15s; }
@@ -540,7 +686,7 @@ function noteSaved(note: LearningNote) {
   backdrop-filter: blur(8px);
 }
 .av-ai { border-color: rgba(56,189,248,0.15); box-shadow: 0 0 8px rgba(56,189,248,0.08); }
-.msg-bd { min-width: 0; max-width: 78%; }
+.msg-bd { min-width: 0; max-width: calc(100% - 40px); }
 .msg-bub { padding: 12px 16px; border-radius: 14px; font-size: 14px; line-height: 1.7; word-break: break-word; }
 .msg.user .msg-bub { background: var(--accent); color: var(--on-accent); border-bottom-right-radius: 6px; }
 .msg:not(.user) .msg-bub {
@@ -575,7 +721,12 @@ function noteSaved(note: LearningNote) {
 
 /* ====== Input ====== */
 .inp-bar { padding-top: 12px; }
-.inp-options { display: flex; align-items: center; margin-bottom: 10px; }
+.inp-options { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; margin-bottom: 10px; }
+.tree-inline-status { font-size: 11px; color: var(--text-mut); }
+.tree-inline-error { border: 0; background: none; padding: 0; font: 12px var(--font); color: var(--red); cursor: pointer; }
+.discussion-context { display: flex; align-items: center; gap: 10px; color: var(--accent); font-size: 12px; margin-bottom: 10px; }
+.discussion-context span { min-width: 0; overflow-wrap: anywhere; }
+.discussion-context button { border: 0; background: none; color: var(--text-mut); font-size: 18px; cursor: pointer; padding: 0 5px; }
 .retrieval-toggle { display: inline-flex; align-items: center; gap: 8px; border: 0; background: transparent; color: var(--text-mut); font: 13px var(--font); cursor: pointer; padding: 5px 0; }
 .retrieval-toggle[aria-checked=true] { color: var(--accent); }
 .retrieval-toggle:disabled { cursor: default; opacity: .55; }
@@ -674,11 +825,17 @@ function noteSaved(note: LearningNote) {
 .inp-text:focus-visible { outline: none; }
 .inp-pill:focus-within { border-color: var(--accent); }
 @media (max-width: 1100px) {
-  .ask { padding: 16px 0 0; }
+  .ask { padding: 16px 18px 12px; }
   .ask-top { flex-wrap: wrap; gap: 12px; padding-left: 32px; }
   .sess-group { flex-wrap: wrap; }
   .sb-open { left: 0; top: 14px; }
   .ask-sidebar { position: absolute; inset: 0 auto 0 0; z-index: 15; width: min(280px, 100%); background: var(--bg-panel); box-shadow: 8px 0 24px rgba(0,0,0,.15); }
+}
+@media (max-width: 900px) {
+  .ask-layout { flex-direction: column; overflow-y: auto; }
+  .ask { flex: 0 0 auto; min-height: min(650px, 78vh); }
+  .chat-zone { flex: 0 1 auto; max-height: 50vh; min-height: 150px; }
+  .inp-bar { margin-top: auto; }
 }
 @media (max-width: 768px) {
   .ask { padding-top: 0; }

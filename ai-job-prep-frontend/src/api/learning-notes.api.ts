@@ -7,7 +7,15 @@ export interface NoteFields { title: string; confusion: string; content: string;
 export interface LearningNote extends NoteFields {
   id: number; version: number; sourceSessionId: number; sources: SourceMessage[]; createdAt: string; updatedAt: string
 }
+export interface LearningTreeState {
+  note: LearningNote | null
+  status: 'idle' | 'pending' | 'updated' | 'unchanged' | 'failed'
+  nodeId: string | null
+  messageId: number | null
+  error: string | null
+}
 interface StoredNote extends Omit<LearningNote, 'sources'> { sourceSnapshot: string }
+interface StoredTreeState extends Omit<LearningTreeState, 'note'> { note: StoredNote | null }
 function readNote({ sourceSnapshot, ...note }: StoredNote): LearningNote {
   return { ...note, sources: JSON.parse(sourceSnapshot) }
 }
@@ -30,4 +38,12 @@ export const notesApi = {
   remove(id: number) { return request.delete(`/api/learning-notes/${id}`) },
   draft(body: DraftRequest) { return request.post<any, NoteDraft>('/api/learning-notes/draft', body, { timeout: 180000 }) },
   continueChat(id: number) { return request.post<any, number>(`/api/learning-notes/${id}/sessions`) },
+  async learningTree(sessionId: number): Promise<LearningTreeState> {
+    const state = await request.get<any, StoredTreeState>(`/api/sessions/${sessionId}/learning-tree`)
+    return { ...state, note: state.note ? readNote(state.note) : null }
+  },
+  async retryLearningTree(sessionId: number): Promise<LearningTreeState> {
+    const state = await request.post<any, StoredTreeState>(`/api/sessions/${sessionId}/learning-tree/retry`)
+    return { ...state, note: state.note ? readNote(state.note) : null }
+  },
 }
