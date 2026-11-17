@@ -41,3 +41,66 @@ test('sanitizes partial streamed HTML as well as complete restored messages', ()
     assert.equal(output.querySelector('[onerror]'), null)
   }
 })
+
+test('renders inline and block math, including multiline derivations, inside Markdown', () => {
+  const source = String.raw`## 公式 $E=mc^2$
+
+- 勾股定理：\(a^2+b^2=c^2\)
+
+$$
+\begin{aligned}
+f(x)&=x^2\\
+f'(x)&=2x
+\end{aligned}
+$$
+\[\frac{1}{2}+\sqrt{4}\]
+`
+  const doc = new JSDOM(renderMarkdown(source)).window.document
+  assert.equal(doc.querySelectorAll('.katex').length, 4)
+  assert.equal(doc.querySelectorAll('.katex-display').length, 2)
+  assert.equal(doc.querySelectorAll('math').length, 4)
+  assert.ok(doc.querySelector('h2 .katex'))
+  assert.ok(doc.querySelector('li .katex'))
+  assert.ok(doc.querySelector('.mfrac'))
+})
+
+test('leaves code, escaped dollars and ordinary prices unchanged', () => {
+  const source = '价格 $5 和 $10；转义 \\$x\\$。\n\n`$x$` 和 `\\(y\\)`\n\n```tex\n$$z$$\n\\[w\\]\n```'
+  const doc = new JSDOM(renderMarkdown(source)).window.document
+  assert.equal(doc.querySelector('.katex'), null)
+  assert.ok(doc.body.textContent.includes('价格 $5 和 $10；转义 $x$'))
+  assert.ok(doc.querySelector('pre code')!.textContent.includes('$$z$$'))
+})
+
+test('supports every streamed prefix and keeps malformed formulas readable', () => {
+  for (const source of [String.raw`$\frac{1}{2}$`, String.raw`\(x^2\)`, String.raw`$$\sum_{i=1}^n i$$`, String.raw`\[\int_0^1 x dx\]`]) {
+    for (let end = 1; end < source.length; end++) {
+      assert.doesNotThrow(() => renderMarkdown(source.slice(0, end)))
+    }
+    assert.match(renderMarkdown(source), /class="katex"/)
+  }
+  const invalid = new JSDOM(renderMarkdown(String.raw`$\frac{1}{$`)).window.document
+  assert.equal(invalid.querySelector('.katex-error')!.textContent, String.raw`\frac{1}{`)
+})
+
+test('math cannot enable executable markup or bypass source HTML sanitization', () => {
+  const source = String.raw`$\href{javascript:alert(1)}{link}$
+
+$\htmlStyle{background:url(https://example.com/track)}{x}$
+
+$\includegraphics{https://example.com/track}$
+
+$\text{<img src=x onerror=alert(1)>}$
+
+<span style="position:fixed" onclick="alert(1)">raw</span>`
+  const doc = new JSDOM(renderMarkdown(source)).window.document
+  assert.equal(doc.querySelector('a,img,script,iframe,[onclick],[onerror]'), null)
+  assert.equal([...doc.querySelectorAll('span')].find(node => node.textContent === 'raw')!.getAttribute('style'), null)
+  for (const element of doc.querySelectorAll('*')) {
+    for (const attribute of element.attributes) {
+      assert.ok(!attribute.name.startsWith('on'))
+      assert.ok(!attribute.value.includes('background:url'))
+      assert.ok(!/^javascript:/i.test(attribute.value))
+    }
+  }
+})

@@ -7,6 +7,8 @@ import App from './App.vue'
 import router from './router'
 import { useAuthStore } from './stores/auth.store'
 import './styles/global.scss'
+import 'katex/dist/katex.min.css'
+import './styles/math.css'
 
 document.documentElement.dataset.theme = localStorage.getItem('theme') === 'light' ? 'light' : 'dark'
 
