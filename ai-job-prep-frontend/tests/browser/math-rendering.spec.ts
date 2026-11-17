@@ -20,6 +20,8 @@ async function setup(page: Page, content = formulas) {
     6: { ...common, id: 6, content: `## 公式与代码\n\n${content}`, treeJson: JSON.stringify({ version: 1,
       nodes: [{ id: 'math-node', title: '公式与代码', body: content, children: [] }] }) },
   }
+  let openedNote: number | null = null
+  const writes: string[] = []
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname
     if (!path.startsWith('/api/')) return route.continue()
@@ -29,7 +31,12 @@ async function setup(page: Page, content = formulas) {
     if (path === '/api/sessions') return ok([{ id: 10, title: '数学推导' }])
     if (path === '/api/chat/session') return ok(10)
     if (path === '/api/sessions/10/messages') return ok(messages)
-    if (path === '/api/sessions/10/learning-tree') return ok({ note: null, status: 'unchanged', nodeId: null, messageId: 4, error: null })
+    if (path === '/api/sessions/10/learning-tree') return ok({ note: openedNote ? notes[openedNote] : null, status: 'unchanged', nodeId: null, messageId: 4, error: null })
+    const opening = path.match(/^\/api\/learning-notes\/(\d+)\/open$/)
+    if (opening) { openedNote = Number(opening[1]); return ok(10) }
+    if (path === '/api/sessions/10/learning-tree/nodes/math-node') return ok({ nodeId: 'math-node', title: '公式与代码', messages })
+    if (path.endsWith('/suggestions')) return ok({ questions: [] })
+    if (route.request().method() === 'PUT' || path.endsWith('/draft')) writes.push(path)
     if (path === '/api/learning-notes') return ok({ records: Object.values(notes), total: 2 })
     const id = Number(path.match(/^\/api\/learning-notes\/(\d+)$/)?.[1])
     if (notes[id]) {
@@ -41,7 +48,7 @@ async function setup(page: Page, content = formulas) {
     }
     return ok([])
   })
-  return { notes, messages }
+  return { notes, messages, writes }
 }
 
 async function expectFourMathForms(container: Locator) {
@@ -90,25 +97,21 @@ test('chat history and incremental completion render all four math forms while i
   expect(errors).toEqual([])
 })
 
-test('legacy notes and editable tree nodes render math without changing saved Markdown', async ({ page }) => {
-  const { notes } = await setup(page)
-  await page.goto('/notes/5')
-  await expectFourMathForms(page.locator('.note-body'))
-  await page.goto('/notes/6')
-  const node = page.getByRole('treeitem', { name: '公式与代码', exact: true })
-  await expectFourMathForms(node)
-  await node.getByRole('button', { name: '编辑 公式与代码 的正文', exact: true }).click()
-  const editor = page.getByRole('textbox', { name: '知识点正文', exact: true })
-  await expect(editor).toHaveValue(formulas)
-  await editor.fill(formulas + '\n\n保留原始公式语法。')
-  await page.getByRole('button', { name: '保存修改', exact: true }).click()
-  await expect(page.getByRole('button', { name: '编辑笔记', exact: true })).toBeVisible()
-  expect(JSON.parse(notes[6]!.treeJson!).nodes[0].body).toBe(formulas + '\n\n保留原始公式语法。')
-  expect(notes[6]!.content).not.toContain('class="katex')
-  await page.reload()
-  await expectFourMathForms(node)
-  await page.getByRole('button', { name: '全文', exact: true }).click()
-  await expectFourMathForms(page.locator('.tree-reading'))
+test('legacy notes and original question nodes render math without rewriting saved content', async ({ page }) => {
+  const { notes, writes } = await setup(page)
+  const before = JSON.stringify(notes)
+  for (const id of [5, 6]) {
+    await page.goto(`/notes/${id}`)
+    await expect(page).toHaveURL(/sessionId=10/)
+    await page.getByRole('button', { name: '历史笔记', exact: true }).click()
+    await expectFourMathForms(page.locator('.history-note-content'))
+    await expect(page.getByRole('button', { name: /编辑笔记|保存修改|整理正文/ })).toHaveCount(0)
+  }
+  await page.getByRole('complementary', { name: '问题目录' }).locator('.tree-node').click()
+  await expectFourMathForms(page.getByRole('region', { name: '原问答回看' }).locator('.source-message.assistant'))
+  await expect(page.getByRole('region', { name: '历史笔记' })).toHaveCount(0)
+  expect(JSON.stringify(notes)).toBe(before)
+  expect(writes).toEqual([])
 })
 
 test('long display math scrolls within chat and note content on mobile with loaded KaTeX fonts', async ({ page }) => {
@@ -117,7 +120,8 @@ test('long display math scrolls within chat and note content on mobile with load
   await setup(page, formulas + '\n\n长公式：\n\n' + longFormula)
   await page.setViewportSize({ width: 1440, height: 1000 })
   await page.goto('/notes/6')
-  await expect(page.locator('.note-body .katex')).toHaveCount(5)
+  await page.getByRole('button', { name: '历史笔记', exact: true }).click()
+  await expect(page.locator('.history-note-content .katex')).toHaveCount(5)
   await page.evaluate(() => document.fonts.ready)
   expect(await page.evaluate(() => Array.from(document.fonts).some(font =>
     font.family.replace(/["']/g, '') === 'KaTeX_Main' && font.status === 'loaded'))).toBe(true)
@@ -125,17 +129,18 @@ test('long display math scrolls within chat and note content on mobile with load
   await page.setViewportSize({ width: 390, height: 844 })
   for (const [path, selector] of [
     ['/ask?sessionId=10', '.msg.assistant .msg-bub'],
-    ['/notes/5', '.note-body'],
-    ['/notes/6', '.note-body'],
+    ['/notes/5', '.history-note-content'],
+    ['/notes/6', '.history-note-content'],
   ]) {
     await page.goto(path!)
+    if (path!.startsWith('/notes')) await page.getByRole('button', { name: '历史笔记', exact: true }).click()
     const display = page.locator(selector!).locator('.katex-display').last()
     await expect(display).toBeVisible()
     await page.evaluate(() => document.fonts.ready)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), path).toBe(true)
     expect(await display.evaluate(element => {
       // Allow a dedicated math wrapper, but not a page-level scroll container.
-      const boundary = element.closest('.msg-bub, .note-body')
+      const boundary = element.closest('.msg-bub, .history-note-content')
       for (let node: HTMLElement | null = element as HTMLElement; node && node !== boundary; node = node.parentElement) {
         if (node.scrollWidth > node.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(node).overflowX)) {
           node.scrollLeft = 40

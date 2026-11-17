@@ -5,7 +5,6 @@ import { authApi } from '@/api/auth.api'
 import type { UserVO } from '@/api/auth.api'
 import router from '@/router'
 import { useKnowledgeBaseStore } from './knowledge-base.store'
-import { confirmNoteLeave, withConfirmedNoteNavigation } from '@/utils/note-leave-guard'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<UserVO | null>(null)
@@ -47,13 +46,12 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function logout() {
-    if (!(await confirmNoteLeave())) return
     try { await authApi.logout() } catch (error) {
       // An expired session is already logged out; other failures must keep the page intact.
       if (!isAxiosError(error) || error.response?.status !== 401) return
     }
     clearSession()
-    await withConfirmedNoteNavigation(() => router.push('/login'))
+    await router.push('/login')
   }
 
   return { user, checked, userId, isLoggedIn, checkAuth, login, register, logout, clearSession }

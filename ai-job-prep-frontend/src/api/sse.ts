@@ -1,5 +1,5 @@
 import type { ToolCall } from '@/types'
-import { dismissSessionExpiryNotice, handleSessionExpiry } from '@/utils/session-expiry'
+import { handleSessionExpiry } from '@/utils/session-expiry'
 
 export interface SSECallbacks {
   onToken?: (content: string, traceId?: string) => void
@@ -35,7 +35,6 @@ export async function connectSSE(
     throw new Error(`SSE connection failed: ${response.status}`)
   }
 
-  dismissSessionExpiryNotice()
   const reader = response.body!.getReader()
   const decoder = new TextDecoder()
   let buffer = ''

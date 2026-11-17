@@ -1,7 +1,7 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import type { ApiResponse } from '@/types'
-import { dismissSessionExpiryNotice, handleSessionExpiry } from '@/utils/session-expiry'
+import { handleSessionExpiry } from '@/utils/session-expiry'
 
 const request = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL,
@@ -16,9 +16,6 @@ request.interceptors.response.use(
     if (body.code !== 0 && body.code !== 200) {
       ElMessage.error(body.message || '请求失败')
       return Promise.reject(new Error(body.message))
-    }
-    if (response.config.url !== '/api/auth/register' && response.config.url !== '/api/knowledge-bases/public') {
-      dismissSessionExpiryNotice()
     }
     return body.data as any
   },

@@ -57,7 +57,7 @@ jobs:
           pnpm test
           pnpm build
 
-      - name: Verify HTTP note saving and math rendering
+      - name: Verify learning trees and math rendering
         working-directory: ai-job-prep-frontend
         run: |
           pnpm exec playwright install --with-deps chromium

@@ -55,6 +55,11 @@ public class LearningNoteController {
         return R.ok(notes.createSession(id, userId));
     }
 
+    @PostMapping("/{id}/open")
+    public R<Long> openTree(@CurrentUserId Long userId, @PathVariable Long id) {
+        return R.ok(notes.openTree(id, userId));
+    }
+
     @ExceptionHandler(HttpMessageNotReadableException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public R<Void> invalidBody() {

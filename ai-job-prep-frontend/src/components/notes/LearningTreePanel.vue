@@ -10,7 +10,7 @@ const props = defineProps<{
   error: string | null
   automatic: boolean
   busy: boolean
-  editingDisabled: boolean
+  questionDisabled: boolean
   selectedNodeId: string | null
   suggestions: string[]
   suggestionsLoading: boolean
@@ -20,7 +20,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   retry: []
-  edit: []
   continue: [node: KnowledgeNode]
   select: [node: KnowledgeNode | null]
   suggest: [question: string, node: KnowledgeNode]
@@ -78,13 +77,13 @@ function toggle(id: string) {
           <p v-if="!suggestions.length" class="suggestion-notice">{{ suggestionDisabledReason || '暂时没有新的推荐，可以继续提问。' }}</p>
         </template>
         <p v-if="suggestionDisabledReason && suggestions.length" class="suggestion-notice">{{ suggestionDisabledReason }}</p>
-        <button class="tree-action continue-node" :disabled="editingDisabled" @click="emit('continue', selected)">自己提问 <span aria-hidden="true">↗</span></button>
+        <button class="tree-action continue-node" :disabled="questionDisabled" @click="emit('continue', selected)">自己提问 <span aria-hidden="true">↗</span></button>
       </section>
 
       <p v-else-if="entries.length" class="tree-browse-hint">选择一个问题，回看当时的问答。</p>
       <div v-else class="tree-empty">
         <span class="tree-empty-mark" aria-hidden="true">⌘</span>
-        <p>{{ note ? '这份旧笔记还没有问题目录，可继续聊天或打开原笔记。' : status === 'pending' ? '正在整理第一轮讨论…' : automatic ? '聊过的问题会自动整理到这里。' : '开启“自动整理”后，新问答会归入目录。' }}</p>
+        <p>{{ note ? '这份历史笔记还没有问题目录，继续聊天后会逐步整理。' : status === 'pending' ? '正在整理第一轮讨论…' : automatic ? '聊过的问题会自动整理到这里。' : '开启“自动整理”后，新问答会归入目录。' }}</p>
       </div>
     </div>
 
@@ -94,9 +93,8 @@ function toggle(id: string) {
         <span>{{ status === 'failed' ? error || '这轮还没整理完成，问答已保留。' : status === 'pending' ? '正在整理，可继续聊天' : status === 'unchanged' ? '这轮没有新增问题' : automatic ? '随对话自动整理' : '自动整理已关闭' }}</span>
         <button v-if="status === 'failed'" class="tree-action" :disabled="busy" @click="emit('retry')">{{ busy ? '重试中…' : '重试' }}</button>
       </div>
-      <div v-if="note" class="tree-footer-actions">
-        <router-link :to="`/notes/${note.id}`">查看整份笔记</router-link>
-        <button class="tree-action" :disabled="editingDisabled || busy" @click="emit('edit')">编辑</button>
+      <div class="tree-footer-actions">
+        <router-link to="/notes">全部学习树</router-link>
       </div>
     </footer>
   </aside>

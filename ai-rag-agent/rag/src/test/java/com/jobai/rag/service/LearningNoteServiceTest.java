@@ -100,6 +100,7 @@ class LearningNoteServiceTest {
         assertThrows(BusinessException.class, () -> service.update(5L,2L,input(null,null)));
         assertThrows(BusinessException.class, () -> service.delete(5L,2L));
         assertThrows(BusinessException.class, () -> service.createSession(5L,2L));
+        assertThrows(BusinessException.class, () -> service.openTree(5L,2L));
         assertThrows(BusinessException.class, () -> service.draft(2L,new LearningNoteService.DraftInput(10L,List.of(1L),5L,null)));
         verifyNoInteractions(sessions, chats, llm);
         verify(notes, never()).updateById(any(LearningNote.class));
@@ -140,6 +141,36 @@ class LearningNoteServiceTest {
         verify(sessions,never()).deleteById(anyLong());
         when(notes.selectById(5L)).thenReturn(null);
         assertEquals("",service.contextForSession(12L,1L));
+    }
+
+    @Test void openingTreeReusesLatestOwnedSessionWithoutChangingNoteOrCallingModel() {
+        LearningNote note = stored();
+        ChatSession existing = new ChatSession(); existing.setId(12L); existing.setNoteId(5L); existing.setUserId(1L);
+        when(sessions.selectOne(any())).thenReturn(existing);
+        assertEquals(12L, service.openTree(5L,1L));
+        assertEquals(12L, service.openTree(5L,1L));
+        var query = ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.Wrapper.class);
+        verify(sessions,times(2)).selectOne(query.capture());
+        assertTrue(query.getValue().getSqlSegment().contains("note_id"));
+        assertTrue(query.getValue().getSqlSegment().contains("user_id"));
+        assertTrue(query.getValue().getSqlSegment().contains("updated_at DESC"));
+        verify(sessions,never()).insert(any(ChatSession.class));
+        verify(notes,never()).updateIfVersion(any(),anyLong());
+        verifyNoInteractions(llm,chats);
+        assertNotNull(note.getSourceSnapshot());
+    }
+
+    @Test void openingTreeAfterSessionDeletionCreatesOnlyALinkedSession() {
+        LearningNote note = stored();
+        String snapshot = note.getSourceSnapshot();
+        doAnswer(inv -> { ((ChatSession)inv.getArgument(0)).setId(12L); return 1; }).when(sessions).insert(any(ChatSession.class));
+        assertEquals(12L, service.openTree(5L,1L));
+        var created = ArgumentCaptor.forClass(ChatSession.class);
+        verify(sessions).insert(created.capture());
+        assertEquals(1L,created.getValue().getUserId());
+        assertEquals(5L,created.getValue().getNoteId());
+        assertEquals(snapshot,note.getSourceSnapshot());
+        verifyNoInteractions(llm,chats);
     }
 
     @Test void failedDraftDoesNotModifyExistingNoteOrPreventRawSave() {

@@ -149,6 +149,15 @@ public class LearningNoteService {
     }
 
     @Transactional
+    public Long openTree(Long noteId, Long userId) {
+        get(noteId, userId);
+        ChatSession latest = sessions.selectOne(new LambdaQueryWrapper<ChatSession>()
+                .eq(ChatSession::getNoteId, noteId).eq(ChatSession::getUserId, userId)
+                .orderByDesc(ChatSession::getUpdatedAt).orderByDesc(ChatSession::getId).last("LIMIT 1"));
+        return latest == null ? createSession(noteId, userId) : latest.getId();
+    }
+
+    @Transactional
     public Long createSession(Long noteId, Long userId) {
         LearningNote note = get(noteId, userId);
         ChatSession session = new ChatSession();

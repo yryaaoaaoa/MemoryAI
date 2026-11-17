@@ -1,11 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
-import { useRoute, useRouter, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
-import { confirmNoteLeave } from '@/utils/note-leave-guard'
-import NoteEditor from '@/components/notes/NoteEditor.vue'
+import { useRoute, useRouter } from 'vue-router'
 import LearningTreePanel from '@/components/notes/LearningTreePanel.vue'
-import { notesApi, type LearningNote, type LearningTreeState, type LearningNodeConversation, type SourceMessage } from '@/api/learning-notes.api'
-import type { KnowledgeNode } from '@/utils/knowledge-tree'
+import { notesApi, type LearningNote, type LearningTreeState, type LearningNodeConversation } from '@/api/learning-notes.api'
+import { flattenNodes, readTree, type KnowledgeNode } from '@/utils/knowledge-tree'
 import { useFeaturesStore } from '@/stores/features.store'
 import { useAuthStore } from '@/stores/auth.store'
 import { ElMessage } from 'element-plus'
@@ -30,8 +28,9 @@ const route = useRoute()
 const router = useRouter()
 const features = useFeaturesStore()
 const linkedNote = ref<LearningNote | null>(null)
-const noteEditor = ref<{ messages: SourceMessage[]; selectedIds: number[]; note?: LearningNote } | null>(null)
-const preparingNote = ref(false)
+const historyNote = ref<LearningNote | null>(null)
+const hasHistoricalNote = computed(() => !!linkedNote.value && (!linkedNote.value.treeJson ||
+  flattenNodes(readTree(linkedNote.value.treeJson).nodes).some(({ node }) => !!node.body.trim())))
 const treeOpen = ref(true)
 const automaticNotes = ref(true)
 const treeState = ref<LearningTreeState>({ note: null, status: 'idle', nodeId: null, messageId: null, error: null })
@@ -62,7 +61,6 @@ const useKnowledgeBase = ref(false)
 const messages = ref<ChatMessage[]>([])
 const showHot = ref(true)
 const loading = ref(false)
-const sending = ref(false)
 const chatArea = ref<HTMLDivElement>()
 const sessionId = ref<number | undefined>(undefined)
 const sessionLoading = ref(true)
@@ -121,6 +119,7 @@ async function loadSuggestions(force = false) {
 }
 
 async function selectTreeNode(node: KnowledgeNode | null) {
+  historyNote.value = null
   const requestVersion = ++nodeRequestVersion
   ++suggestionRequestVersion
   suggestionRequestKey = ''
@@ -158,11 +157,24 @@ async function selectTreeNode(node: KnowledgeNode | null) {
 }
 
 function returnToChat() {
+  historyNote.value = null
   ++nodeRequestVersion
   nodeReview.value = null
   nodeReviewLoading.value = false
   nodeReviewError.value = ''
   void scrollToBottom()
+}
+
+async function openHistoricalNote() {
+  if (!linkedNote.value || !hasHistoricalNote.value) return
+  ++nodeRequestVersion
+  nodeReview.value = null
+  nodeReviewLoading.value = false
+  nodeReviewError.value = ''
+  historyNote.value = linkedNote.value
+  await nextTick()
+  reviewArea.value?.scrollTo({ top: 0 })
+  reviewArea.value?.scrollIntoView({ block: 'nearest' })
 }
 
 function stopTreePolling() {
@@ -272,6 +284,7 @@ const placeholder = '输入问题，开始对话…'
 onMounted(async () => {
   automaticNotes.value = localStorage.getItem(automaticNotesKey()) !== 'false'
   void loadResumes()
+  if (route.query.new === '1') { await newSession(false); return }
   const saved = route.query.sessionId || localStorage.getItem(sessionStorageKey())
   if (saved && Number.isSafeInteger(Number(saved)) && Number(saved) > 0) await switchSession(Number(saved))
   else await newSession(false)
@@ -283,7 +296,6 @@ async function loadSessions() {
 }
 
 async function switchSession(id: number) {
-  if (noteEditor.value && !await confirmNoteLeave()) return
   const version = beginSessionChange()
   sessionId.value = id; localStorage.setItem(sessionStorageKey(), String(id)); showingSessions.value = false
   try {
@@ -326,8 +338,7 @@ function beginSessionChange() {
   sessionError.value = ''
   messages.value = []
   linkedNote.value = null
-  noteEditor.value = null
-  preparingNote.value = false
+  historyNote.value = null
   sessionResumeId.value = null
   resumeSaving.value = false
   lastUsage.value = null
@@ -336,7 +347,6 @@ function beginSessionChange() {
 }
 
 async function newSession(notify = true) {
-  if (noteEditor.value && !await confirmNoteLeave()) return
   const version = beginSessionChange()
   sessionId.value = undefined
   try {
@@ -370,8 +380,6 @@ async function send(suggested?: { question: string; node: Pick<KnowledgeNode, 'i
   messages.value.push({ role: 'user', content: text })
   inputText.value = ''
   loading.value = true
-  sending.value = true
-  setTimeout(() => sending.value = false, 300)
   scrollToBottom()
 
   let timeoutId: ReturnType<typeof setTimeout> | undefined
@@ -480,13 +488,6 @@ function stopStreaming() {
 }
 
 onBeforeUnmount(() => { ++sessionVersion; ++nodeRequestVersion; clearSuggestions(); stopStreaming(); stopTreePolling() })
-onBeforeRouteLeave(() => confirmNoteLeave())
-onBeforeRouteUpdate(async (to, from) => {
-  if (to.query.sessionId === from.query.sessionId) return true
-  if (!await confirmNoteLeave()) return false
-  noteEditor.value = null
-  return true
-})
 
 async function scrollToBottom() { await nextTick(); const el = chatArea.value; if (el) el.scrollTop = el.scrollHeight }
 const md = renderMarkdown
@@ -522,7 +523,8 @@ function displayMessages(msgs: any[]): ChatMessage[] {
   }).filter(m => m.role === 'user' || m.content || m.status)
 }
 
-watch(() => route.query.sessionId, id => {
+watch(() => [route.query.sessionId, route.query.new], ([id, startNew]) => {
+  if (startNew === '1') { void newSession(false); return }
   const numeric = Number(id)
   if (Number.isSafeInteger(numeric) && numeric > 0 && numeric !== sessionId.value) void switchSession(numeric)
 })
@@ -533,68 +535,10 @@ async function focusSourceMessage() {
   const id = Number(route.query.messageId)
   if (Number.isSafeInteger(id) && id > 0) document.getElementById(`chat-message-${id}`)?.scrollIntoView({ block: 'center' })
 }
-async function openNote(index: number, update = false) {
-  if (!sessionId.value || loading.value || preparingNote.value) return
-  const version = sessionVersion
-  const current = messages.value[index]
-  preparingNote.value = true
-  try {
-    const stored = displayMessages(await ragApi.getMessages(sessionId.value))
-      .filter((message): message is ChatMessage & { id: number } => !!message.id && !!message.content && (message.role === 'user' || !message.status || message.status === 'completed'))
-    if (version !== sessionVersion) return
-    const match = current?.id ? stored.findIndex(message => message.id === current.id) : -1
-    if (match < 0) { ElMessage.warning('回答尚未保存完成，请稍后再试'); return }
-    const answer = stored[match]!
-    const previous = stored[match - 1]
-    const latestNote = update && linkedNote.value ? await notesApi.get(linkedNote.value.id) : undefined
-    if (version !== sessionVersion) return
-    if (latestNote) linkedNote.value = latestNote
-    noteEditor.value = {
-      messages: stored.map(message => ({ id: message.id, role: message.role, content: message.content })),
-      selectedIds: previous?.role === 'user' ? [previous.id, answer.id] : [answer.id],
-      note: latestNote,
-    }
-  } catch { /* interceptor reports errors, current conversation is preserved */ }
-  finally { if (version === sessionVersion) preparingNote.value = false }
-}
-function noteSaved(note: LearningNote) {
-  if (linkedNote.value?.id === note.id) linkedNote.value = note
-  noteEditor.value = null
-  void refreshLearningTree()
-}
-
-async function editLearningNote() {
-  if (!sessionId.value || !linkedNote.value || preparingNote.value || loading.value) return
-  const version = sessionVersion
-  preparingNote.value = true
-  try {
-    const [note, stored] = await Promise.all([notesApi.get(linkedNote.value.id), ragApi.getMessages(sessionId.value)])
-    if (version !== sessionVersion) return
-    linkedNote.value = note
-    noteEditor.value = {
-      note, selectedIds: [],
-      messages: displayMessages(stored)
-        .filter((message): message is ChatMessage & { id: number } => !!message.id && !!message.content &&
-          (message.role === 'user' || !message.status || message.status === 'completed'))
-        .map(message => ({ id: message.id, role: message.role, content: message.content })),
-    }
-  } catch {
-    // The request interceptor reports the failure; the current tree stays readable.
-  } finally {
-    if (version === sessionVersion) preparingNote.value = false
-  }
-}
-
-function closeNoteEditor() {
-  noteEditor.value = null
-  void refreshLearningTree()
-}
-
 </script>
 
 <template>
   <div class="ask-layout">
-    <NoteEditor v-if="noteEditor && sessionId" :session-id="sessionId" :messages="noteEditor.messages" :selected-ids="noteEditor.selectedIds" :note="noteEditor.note" @close="closeNoteEditor" @saved="noteSaved" />
     <!-- Resume sidebar -->
     <div v-if="sidebarOpen" class="ask-sidebar" @keydown.esc="sidebarOpen = false">
       <div class="sb-hdr">
@@ -655,7 +599,8 @@ function closeNoteEditor() {
 
       <!-- Hot suggestions -->
       <div v-if="linkedNote" class="linked-note">
-        正在学习：<router-link :to="`/notes/${linkedNote.id}`">{{ linkedNote.title }}</router-link>
+        <span>正在学习：{{ linkedNote.title }}</span>
+        <button v-if="hasHistoricalNote" class="sess-btn" :aria-pressed="!!historyNote" @click="openHistoricalNote">历史笔记</button>
       </div>
 
       <div v-if="sessionLoading" class="hot-zone" role="status">正在加载会话…</div>
@@ -663,6 +608,29 @@ function closeNoteEditor() {
         <p>{{ sessionError }}</p>
         <button class="sess-btn" @click="sessionId ? switchSession(sessionId) : newSession(false)">重试</button>
       </div>
+      <section v-else-if="historyNote" ref="reviewArea" class="source-review history-note" aria-label="历史笔记">
+        <header class="source-review-header">
+          <div><span class="source-review-label">历史笔记 · 只读</span><h2>{{ historyNote.title }}</h2></div>
+          <button class="sess-btn" @click="returnToChat">返回最新聊天</button>
+        </header>
+        <div class="history-note-meta">
+          <span>原学习状态：{{ historyNote.status === 'PENDING' ? '待弄懂' : historyNote.status === 'REVIEW' ? '待复习' : '已理解' }}</span>
+          <span v-if="historyNote.createdAt">创建于 {{ historyNote.createdAt.slice(0, 10) }}</span>
+        </div>
+        <section v-if="historyNote.confusion" class="history-note-confusion">
+          <h3>当时的困惑</h3>
+          <div class="source-message-content" v-html="md(historyNote.confusion)"></div>
+        </section>
+        <div class="source-message-content history-note-content" v-html="md(historyNote.content)"></div>
+        <details class="history-note-sources">
+          <summary>保存的原始问答（{{ historyNote.sources.length }} 条）</summary>
+          <article v-for="source in historyNote.sources" :key="source.id" class="source-message history-note-source" :class="source.role">
+            <div class="source-message-role">{{ source.role === 'user' ? '问题' : '回答' }}</div>
+            <div class="source-message-content" v-html="md(source.content)"></div>
+          </article>
+          <p v-if="!historyNote.sources.length" class="source-review-notice">这份历史笔记没有保存原始问答快照。</p>
+        </details>
+      </section>
       <section v-else-if="nodeReview" ref="reviewArea" class="source-review" aria-label="原问答回看">
         <header class="source-review-header">
           <div><span class="source-review-label">原问答</span><h2>{{ nodeReview.title }}</h2></div>
@@ -673,7 +641,10 @@ function closeNoteEditor() {
           <p>{{ nodeReviewError }}</p>
           <button class="sess-btn" @click="selectTreeNode(selectedNode)">重新读取</button>
         </div>
-        <p v-else-if="!nodeReview.messages.length" class="source-review-notice">这个节点尚未关联原问答。可以返回聊天查看历史，或打开原笔记。</p>
+        <div v-else-if="!nodeReview.messages.length" class="source-review-notice">
+          <p>这个节点尚未关联原问答。{{ hasHistoricalNote ? '已有内容保留在历史笔记中。' : '可以返回聊天查看历史。' }}</p>
+          <button v-if="hasHistoricalNote" class="sess-btn" @click="openHistoricalNote">查看历史笔记</button>
+        </div>
         <article v-for="source in nodeReview.messages" v-else :key="source.id" class="source-message" :class="source.role">
           <div class="source-message-role">{{ source.role === 'user' ? '问题' : '回答' }}</div>
           <div class="source-message-content" v-html="md(source.content)"></div>
@@ -697,13 +668,6 @@ function closeNoteEditor() {
             <div v-if="msg.content" class="msg-bub" v-html="md(msg.content)"></div>
             <div v-else-if="msg.role === 'assistant' && i === messages.length - 1 && loading" class="think-dots" role="status" aria-label="正在生成回答"><span></span><span></span><span></span></div>
 
-            <details v-if="msg.role === 'assistant' && msg.content && (!msg.status || msg.status === 'completed') && !loading" class="note-message-actions">
-              <summary>手动整理</summary>
-              <div>
-                <button class="sess-btn" :disabled="preparingNote || sessionLoading" @click="openNote(i)">存为学习笔记</button>
-                <button v-if="linkedNote" class="sess-btn" :disabled="preparingNote || sessionLoading" @click="openNote(i, true)">更新这条笔记</button>
-              </div>
-            </details>
             <!-- Tool calls -->
             <div v-if="msg.toolCalls?.length" class="tcs">
               <div v-for="(tc, tci) in msg.toolCalls" :key="tci" :class="['tcs-i', tc.status]">
@@ -759,20 +723,16 @@ function closeNoteEditor() {
     </div>
     <LearningTreePanel v-show="treeOpen" :key="sessionId" :note="linkedNote" :status="treeState.status"
       :updated-node-id="treeState.nodeId" :error="treeState.error" :automatic="automaticNotes" :busy="treeRetrying"
-      :editing-disabled="preparingNote || loading || sessionLoading || !!sessionError"
+      :question-disabled="loading || sessionLoading || !!sessionError"
       :selected-node-id="selectedNode?.id ?? null" :suggestions="suggestions" :suggestions-loading="suggestionsLoading"
       :suggestions-error="suggestionsError" :suggestion-disabled-reason="suggestionDisabledReason"
-      @close="treeOpen = false" @retry="retryLearningTree" @edit="editLearningNote" @continue="continueFromNode"
+      @close="treeOpen = false" @retry="retryLearningTree" @continue="continueFromNode"
       @select="selectTreeNode" @suggest="sendSuggestion" @retry-suggestions="loadSuggestions(true)" />
   </div>
 </template>
 
 <style scoped>
-.linked-note { padding: 10px 0 16px; color: var(--text-mut); font-size: 13px; overflow-wrap: anywhere; }
-.linked-note a { color: var(--accent); text-decoration: none; }
-.note-message-actions { margin: 8px 0; color: var(--text-mut); font-size: 11px; }
-.note-message-actions summary { cursor: pointer; width: fit-content; }
-.note-message-actions>div { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.linked-note { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px; padding: 10px 0 16px; color: var(--text-mut); font-size: 13px; overflow-wrap: anywhere; }
 .msg:target { outline: 1px solid var(--accent); }
 .source-review { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 20px; }
 .source-review-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 12px 0 20px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
@@ -793,6 +753,11 @@ function closeNoteEditor() {
 .source-message-content :deep(th), .source-message-content :deep(td) { border-bottom: 1px solid var(--border); padding: 7px 10px; }
 .source-message-content :deep(img) { max-width: 100%; height: auto; }
 .source-message-content :deep(a) { color: var(--accent); }
+.history-note-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--text-mut); font-size: 12px; margin-bottom: 20px; }
+.history-note-confusion { margin-bottom: 24px; }
+.history-note-confusion h3 { margin-bottom: 8px; font-size: 13px; font-weight: 500; color: var(--text-mut); }
+.history-note-sources { border-top: 1px solid var(--border); margin-top: 24px; padding-top: 18px; }
+.history-note-sources summary { cursor: pointer; margin-bottom: 18px; color: var(--text-mut); font-size: 13px; }
 
 .response-status { margin-top: 8px; color: var(--text-mut); font-size: 13px; }
 .ask-layout { display: flex; height: 100%; min-height: 0; position: relative; }
