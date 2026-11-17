@@ -13,7 +13,7 @@ server:
         secure: ${COOKIE_SECURE:false}
         same-site: lax
         path: /
-        max-age: 1800
+        max-age: 604800
 
 spring:
   application:
@@ -38,7 +38,7 @@ spring:
       timeout: 5000
   session:
     store-type: redis
-    timeout: 1800
+    timeout: 604800
     redis:
       namespace: spring:session:memoryai
       flush-mode: on_save
