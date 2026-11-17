@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
 import { confirmNoteLeave } from '@/utils/note-leave-guard'
 import NoteEditor from '@/components/notes/NoteEditor.vue'
 import LearningTreePanel from '@/components/notes/LearningTreePanel.vue'
-import { notesApi, type LearningNote, type LearningTreeState, type SourceMessage } from '@/api/learning-notes.api'
+import { notesApi, type LearningNote, type LearningTreeState, type LearningNodeConversation, type SourceMessage } from '@/api/learning-notes.api'
 import type { KnowledgeNode } from '@/utils/knowledge-tree'
 import { useFeaturesStore } from '@/stores/features.store'
 import { useAuthStore } from '@/stores/auth.store'
@@ -39,6 +39,19 @@ const treeRetrying = ref(false)
 const treeLoadFailed = ref(false)
 const discussionNode = ref<Pick<KnowledgeNode, 'id' | 'title'> | null>(null)
 const inputArea = ref<HTMLTextAreaElement>()
+const selectedNode = ref<KnowledgeNode | null>(null)
+const nodeReview = ref<LearningNodeConversation | null>(null)
+const nodeReviewLoading = ref(false)
+const nodeReviewError = ref('')
+const reviewArea = ref<HTMLDivElement>()
+const suggestions = ref<string[]>([])
+const suggestionsLoading = ref(false)
+const suggestionsError = ref('')
+const suggestionCache = new Map<string, string[]>()
+let nodeRequestVersion = 0
+let suggestionRequestVersion = 0
+let suggestionRequestKey = ''
+let chatRevision = 0
 let treeTimer: ReturnType<typeof setTimeout> | undefined
 let treeRequestVersion = 0
 let expectedTreeMessageId: number | undefined
@@ -67,6 +80,90 @@ const sessionResumeId = ref<number | null>(null)
 const auth = useAuthStore()
 const sessionStorageKey = () => `rag_session_id:${auth.userId}`
 const automaticNotesKey = () => `learning_tree_enabled:${auth.userId}`
+const suggestionDisabledReason = computed(() => inputText.value.trim() ? '先发送或清空输入框里的草稿，再选择推荐。'
+  : loading.value ? '正在回答，完成后可以接着问。' : sessionLoading.value || sessionError.value || !sessionId.value ? '会话加载完成后可以接着问。' : '')
+
+function clearSuggestions() {
+  ++suggestionRequestVersion
+  suggestionRequestKey = ''
+  suggestions.value = []
+  suggestionsLoading.value = false
+  suggestionsError.value = ''
+  suggestionCache.clear()
+}
+
+function suggestionKey(nodeId: string) {
+  return `${sessionId.value}:${linkedNote.value?.version}:${nodeId}:${chatRevision}`
+}
+
+async function loadSuggestions(force = false) {
+  if (!selectedNode.value || !sessionId.value || loading.value || sessionLoading.value) return
+  const nodeId = selectedNode.value.id
+  const key = suggestionKey(nodeId)
+  if (!force && suggestionsLoading.value && suggestionRequestKey === key) return
+  const requestVersion = ++suggestionRequestVersion
+  suggestionRequestKey = key
+  suggestionsError.value = ''
+  const cached = suggestionCache.get(key)
+  if (!force && cached) { suggestions.value = cached; suggestionsLoading.value = false; return }
+  suggestions.value = []
+  suggestionsLoading.value = true
+  try {
+    const result = await notesApi.nodeSuggestions(sessionId.value, nodeId)
+    if (requestVersion !== suggestionRequestVersion || selectedNode.value?.id !== nodeId || suggestionKey(nodeId) !== key) return
+    suggestions.value = result.questions
+    suggestionCache.set(key, result.questions)
+  } catch {
+    if (requestVersion === suggestionRequestVersion) suggestionsError.value = '暂时无法推荐问题，原问答仍可查看。'
+  } finally {
+    if (requestVersion === suggestionRequestVersion) suggestionsLoading.value = false
+  }
+}
+
+async function selectTreeNode(node: KnowledgeNode | null) {
+  const requestVersion = ++nodeRequestVersion
+  ++suggestionRequestVersion
+  suggestionRequestKey = ''
+  suggestions.value = []
+  suggestionsLoading.value = false
+  suggestionsError.value = ''
+  selectedNode.value = node
+  nodeReviewError.value = ''
+  if (!node) {
+    nodeReview.value = null
+    nodeReviewLoading.value = false
+    clearSuggestions()
+    return
+  }
+  nodeReview.value = { nodeId: node.id, title: node.title, messages: [] }
+  nodeReviewLoading.value = true
+  void loadSuggestions()
+  if (!sessionId.value) return
+  try {
+    const result = await notesApi.nodeConversation(sessionId.value, node.id)
+    if (requestVersion !== nodeRequestVersion) return
+    nodeReview.value = result
+  } catch {
+    if (requestVersion === nodeRequestVersion) nodeReviewError.value = '无法读取原问答，请重试。'
+  } finally {
+    if (requestVersion === nodeRequestVersion) {
+      nodeReviewLoading.value = false
+      await nextTick()
+      if (requestVersion === nodeRequestVersion) {
+        reviewArea.value?.scrollTo({ top: 0 })
+        reviewArea.value?.scrollIntoView({ block: 'nearest' })
+      }
+    }
+  }
+}
+
+function returnToChat() {
+  ++nodeRequestVersion
+  nodeReview.value = null
+  nodeReviewLoading.value = false
+  nodeReviewError.value = ''
+  void scrollToBottom()
+}
 
 function stopTreePolling() {
   clearTimeout(treeTimer)
@@ -101,11 +198,14 @@ async function refreshLearningTree(expectedMessageId?: number) {
         treeLoadFailed.value = true
         treeState.value = { ...state, status: 'failed', error: '暂未取得整理结果，可以稍后重试。问答已保留。' }
       }
-    } else treePollStarted = 0
+    } else {
+      treePollStarted = 0
+      if (!loading.value) void loadSuggestions()
+    }
   } catch {
     if (version !== sessionVersion || requestVersion !== treeRequestVersion) return
     treeLoadFailed.value = true
-    treeState.value = { ...treeState.value, status: 'failed', error: '无法读取学习树，请重试。聊天可以继续。' }
+    treeState.value = { ...treeState.value, status: 'failed', error: '无法读取问题目录，请重试。聊天可以继续。' }
   }
 }
 
@@ -136,8 +236,14 @@ function toggleAutomaticNotes() {
 }
 
 function continueFromNode(node: KnowledgeNode) {
+  returnToChat()
   discussionNode.value = { id: node.id, title: node.title }
-  inputArea.value?.focus()
+  void nextTick(() => inputArea.value?.focus())
+}
+
+function sendSuggestion(question: string, node: KnowledgeNode) {
+  if (suggestionDisabledReason.value) return
+  void send({ question, node })
 }
 
 async function loadResumes() {
@@ -208,6 +314,13 @@ function beginSessionChange() {
   treeRetrying.value = false
   treeLoadFailed.value = false
   discussionNode.value = null
+  ++nodeRequestVersion
+  nodeReview.value = null
+  nodeReviewLoading.value = false
+  nodeReviewError.value = ''
+  selectedNode.value = null
+  chatRevision = 0
+  clearSuggestions()
   useKnowledgeBase.value = false
   sessionLoading.value = true
   sessionError.value = ''
@@ -241,13 +354,17 @@ async function newSession(notify = true) {
   }
 }
 
-async function send() {
-  const text = inputText.value.trim()
+async function send(suggested?: { question: string; node: Pick<KnowledgeNode, 'id' | 'title'> }) {
+  const text = suggested ? suggested.question : inputText.value.trim()
   if (!text || loading.value || sessionLoading.value || sessionError.value || !sessionId.value) return
+  if (suggested && inputText.value.trim()) return
   const version = sessionVersion
   const id = sessionId.value
   const organizeNotes = automaticNotes.value
-  const noteNodeId = discussionNode.value?.id
+  const noteNodeId = suggested?.node.id ?? discussionNode.value?.id
+  returnToChat()
+  ++chatRevision
+  clearSuggestions()
   discussionNode.value = null
   showHot.value = false
   messages.value.push({ role: 'user', content: text })
@@ -345,6 +462,7 @@ async function send() {
       abortCtrl.value = null
       loading.value = false
       scrollToBottom()
+      if (assistantMessage.status === 'completed' && treeState.value.status !== 'pending') void loadSuggestions()
     }
   }
 }
@@ -361,7 +479,7 @@ function stopStreaming() {
   loading.value = false
 }
 
-onBeforeUnmount(() => { ++sessionVersion; stopStreaming(); stopTreePolling() })
+onBeforeUnmount(() => { ++sessionVersion; ++nodeRequestVersion; clearSuggestions(); stopStreaming(); stopTreePolling() })
 onBeforeRouteLeave(() => confirmNoteLeave())
 onBeforeRouteUpdate(async (to, from) => {
   if (to.query.sessionId === from.query.sessionId) return true
@@ -410,6 +528,7 @@ watch(() => route.query.sessionId, id => {
 })
 watch(() => route.query.messageId, () => { void focusSourceMessage() })
 async function focusSourceMessage() {
+  if (route.query.messageId) returnToChat()
   await nextTick()
   const id = Number(route.query.messageId)
   if (Number.isSafeInteger(id) && id > 0) document.getElementById(`chat-message-${id}`)?.scrollIntoView({ block: 'center' })
@@ -521,7 +640,7 @@ function closeNoteEditor() {
           <span v-if="lastUsage" class="sess-usage" title="本次对话累计消耗 token 数">↑{{ lastUsage.prompt }} ↓{{ lastUsage.completion }} = {{ lastUsage.total }}</span>
           <button class="sess-btn" @click="loadSessions">切换</button>
           <button class="sess-btn sess-new" @click="newSession()">+ 新对话</button>
-          <button class="sess-btn tree-toggle" :aria-expanded="treeOpen" @click="treeOpen = !treeOpen">{{ treeOpen ? '收起学习树' : '学习树' }}</button>
+          <button class="sess-btn tree-toggle" :aria-expanded="treeOpen" @click="treeOpen = !treeOpen">{{ treeOpen ? '收起目录' : '问题目录' }}</button>
         </div>
       </div>
 
@@ -544,9 +663,25 @@ function closeNoteEditor() {
         <p>{{ sessionError }}</p>
         <button class="sess-btn" @click="sessionId ? switchSession(sessionId) : newSession(false)">重试</button>
       </div>
+      <section v-else-if="nodeReview" ref="reviewArea" class="source-review" aria-label="原问答回看">
+        <header class="source-review-header">
+          <div><span class="source-review-label">原问答</span><h2>{{ nodeReview.title }}</h2></div>
+          <button class="sess-btn" @click="returnToChat">返回最新聊天</button>
+        </header>
+        <p v-if="nodeReviewLoading" class="source-review-notice" role="status">正在读取原问答…</p>
+        <div v-else-if="nodeReviewError" class="source-review-notice" role="status">
+          <p>{{ nodeReviewError }}</p>
+          <button class="sess-btn" @click="selectTreeNode(selectedNode)">重新读取</button>
+        </div>
+        <p v-else-if="!nodeReview.messages.length" class="source-review-notice">这个节点尚未关联原问答。可以返回聊天查看历史，或打开原笔记。</p>
+        <article v-for="source in nodeReview.messages" v-else :key="source.id" class="source-message" :class="source.role">
+          <div class="source-message-role">{{ source.role === 'user' ? '问题' : '回答' }}</div>
+          <div class="source-message-content" v-html="md(source.content)"></div>
+        </article>
+      </section>
       <div v-else-if="showHot" class="hot-zone">
         <h2 class="hot-h2">今天想弄懂什么？</h2>
-        <p class="hot-p">{{ automaticNotes ? '顺着问题聊下去，知识会逐步整理到学习树里。' : '提问、追问，把没弄懂的地方讲清楚。' }}</p>
+        <p class="hot-p">{{ automaticNotes ? '顺着问题聊下去，聊过的内容会自动整理成目录。' : '提问、追问，把没弄懂的地方讲清楚。' }}</p>
         <div class="hot-q">
           <button v-for="q in (['什么是 CAP 定理','ThreadLocal 内存泄漏','MyBatis 一二级缓存','Spring 循环依赖'])" :key="q"
             class="hq-item" @click="inputText = q; send()">{{ q }}</button>
@@ -603,7 +738,7 @@ function closeNoteEditor() {
             <span>知识库检索</span>
           </button>
           <span v-if="treeState.status === 'pending' && !treeOpen" class="tree-inline-status" role="status">正在整理，可继续聊天</span>
-          <button v-else-if="treeState.status === 'failed' && !treeOpen" class="tree-inline-error" @click="treeOpen = true">学习树尚未更新 · 查看</button>
+          <button v-else-if="treeState.status === 'failed' && !treeOpen" class="tree-inline-error" @click="treeOpen = true">问题目录尚未更新 · 查看</button>
         </div>
         <div class="inp-pill">
           <textarea
@@ -625,7 +760,10 @@ function closeNoteEditor() {
     <LearningTreePanel v-show="treeOpen" :key="sessionId" :note="linkedNote" :status="treeState.status"
       :updated-node-id="treeState.nodeId" :error="treeState.error" :automatic="automaticNotes" :busy="treeRetrying"
       :editing-disabled="preparingNote || loading || sessionLoading || !!sessionError"
-      @close="treeOpen = false" @retry="retryLearningTree" @edit="editLearningNote" @continue="continueFromNode" />
+      :selected-node-id="selectedNode?.id ?? null" :suggestions="suggestions" :suggestions-loading="suggestionsLoading"
+      :suggestions-error="suggestionsError" :suggestion-disabled-reason="suggestionDisabledReason"
+      @close="treeOpen = false" @retry="retryLearningTree" @edit="editLearningNote" @continue="continueFromNode"
+      @select="selectTreeNode" @suggest="sendSuggestion" @retry-suggestions="loadSuggestions(true)" />
   </div>
 </template>
 
@@ -636,6 +774,25 @@ function closeNoteEditor() {
 .note-message-actions summary { cursor: pointer; width: fit-content; }
 .note-message-actions>div { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .msg:target { outline: 1px solid var(--accent); }
+.source-review { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 20px; }
+.source-review-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 12px 0 20px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+.source-review-header>div { min-width: 0; }
+.source-review-header h2 { font: 500 18px/1.65 var(--font); margin-top: 6px; overflow-wrap: anywhere; }
+.source-review-header button { flex: none; }
+.source-review-label { color: var(--text-mut); font-size: 11px; }
+.source-review-notice { color: var(--text-mut); line-height: 1.8; font-size: 13px; }
+.source-review-notice .sess-btn { margin-top: 10px; }
+.source-message { margin-bottom: 25px; }
+.source-message-role { font-size: 11px; color: var(--text-mut); margin-bottom: 8px; }
+.source-message.user { padding: 14px 16px; border-radius: 10px; background: var(--bg-hover); }
+.source-message-content { font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
+.source-message-content :deep(p) { margin-bottom: 10px; }
+.source-message-content :deep(pre) { background: var(--bg-code); padding: 12px; border-radius: 8px; overflow-x: auto; white-space: pre; font: 12px/1.7 var(--font-mono); }
+.source-message-content :deep(ul), .source-message-content :deep(ol) { padding-left: 22px; }
+.source-message-content :deep(table) { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+.source-message-content :deep(th), .source-message-content :deep(td) { border-bottom: 1px solid var(--border); padding: 7px 10px; }
+.source-message-content :deep(img) { max-width: 100%; height: auto; }
+.source-message-content :deep(a) { color: var(--accent); }
 
 .response-status { margin-top: 8px; color: var(--text-mut); font-size: 13px; }
 .ask-layout { display: flex; height: 100%; min-height: 0; position: relative; }
@@ -835,6 +992,8 @@ function closeNoteEditor() {
   .ask-layout { flex-direction: column; overflow-y: auto; }
   .ask { flex: 0 0 auto; min-height: min(650px, 78vh); }
   .chat-zone { flex: 0 1 auto; max-height: 50vh; min-height: 150px; }
+  .source-review { flex: 0 1 auto; max-height: 55vh; min-height: 200px; }
+  .source-review-header { flex-wrap: wrap; gap: 10px; }
   .inp-bar { margin-top: auto; }
 }
 @media (max-width: 768px) {

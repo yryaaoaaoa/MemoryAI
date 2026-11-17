@@ -2,7 +2,6 @@
 import { computed, ref, watch } from 'vue'
 import type { LearningNote, LearningTreeState } from '@/api/learning-notes.api'
 import { flattenNodes, readTree, type KnowledgeNode } from '@/utils/knowledge-tree'
-import { renderMarkdown } from '@/utils/markdown'
 
 const props = defineProps<{
   note: LearningNote | null
@@ -12,25 +11,29 @@ const props = defineProps<{
   automatic: boolean
   busy: boolean
   editingDisabled: boolean
+  selectedNodeId: string | null
+  suggestions: string[]
+  suggestionsLoading: boolean
+  suggestionsError: string
+  suggestionDisabledReason: string
 }>()
 const emit = defineEmits<{
   close: []
   retry: []
   edit: []
   continue: [node: KnowledgeNode]
+  select: [node: KnowledgeNode | null]
+  suggest: [question: string, node: KnowledgeNode]
+  retrySuggestions: []
 }>()
-const selectedId = ref<string | null>(null)
 const collapsed = ref<string[]>([])
 const nodes = computed(() => props.note?.treeJson ? readTree(props.note.treeJson).nodes : [])
 const entries = computed(() => flattenNodes(nodes.value))
 const visible = computed(() => entries.value.filter(entry => !entry.ancestors.some(id => collapsed.value.includes(id))))
-const selected = computed(() => entries.value.find(entry => entry.node.id === selectedId.value)?.node)
+const selected = computed(() => entries.value.find(entry => entry.node.id === props.selectedNodeId)?.node)
 
 watch(entries, all => {
-  // Background updates must not move the node the reader is currently viewing.
-  if (!all.some(entry => entry.node.id === selectedId.value)) {
-    selectedId.value = all.find(entry => entry.node.id === props.updatedNodeId)?.node.id ?? all[0]?.node.id ?? null
-  }
+  if (props.selectedNodeId && !all.some(entry => entry.node.id === props.selectedNodeId)) emit('select', null)
   collapsed.value = collapsed.value.filter(id => all.some(entry => entry.node.id === id))
 }, { immediate: true })
 
@@ -40,21 +43,21 @@ function toggle(id: string) {
 </script>
 
 <template>
-  <aside class="learning-tree-panel" aria-label="学习树">
+  <aside class="learning-tree-panel" aria-label="问题目录">
     <header class="tree-heading">
-      <h2>学习树</h2>
-      <span v-if="entries.length" class="tree-count">{{ entries.length }} 个知识点</span>
-      <button class="tree-close" aria-label="收起学习树" @click="emit('close')">×</button>
+      <h2>问题目录</h2>
+      <span v-if="entries.length" class="tree-count">{{ entries.length }} 个问题</span>
+      <button class="tree-close" aria-label="收起问题目录" @click="emit('close')">×</button>
     </header>
 
     <div class="tree-reading">
-      <ul v-if="entries.length" class="tree-list" aria-label="知识点">
+      <ul v-if="entries.length" class="tree-list" aria-label="已聊过的问题">
         <li v-for="entry in visible" :key="entry.node.id" :style="{ '--node-depth': Math.min(entry.ancestors.length, 5) }">
-          <div :class="['tree-row', { selected: selectedId === entry.node.id }]">
+          <div :class="['tree-row', { selected: selectedNodeId === entry.node.id }]">
             <button v-if="entry.node.children.length" class="tree-fold" :aria-label="`${collapsed.includes(entry.node.id) ? '展开' : '收起'}${entry.node.title}`"
               :aria-expanded="!collapsed.includes(entry.node.id)" @click="toggle(entry.node.id)">{{ collapsed.includes(entry.node.id) ? '›' : '⌄' }}</button>
             <span v-else class="tree-leaf" aria-hidden="true">·</span>
-            <button class="tree-node" :aria-pressed="selectedId === entry.node.id" @click="selectedId = entry.node.id">
+            <button class="tree-node" :aria-pressed="selectedNodeId === entry.node.id" @click="emit('select', entry.node)">
               <span>{{ entry.node.title }}</span>
               <span v-if="entry.node.id === updatedNodeId && status === 'updated'" class="tree-updated">已更新</span>
             </button>
@@ -62,28 +65,33 @@ function toggle(id: string) {
         </li>
       </ul>
 
-      <section v-if="selected" class="node-note" aria-label="节点笔记">
-        <div class="node-note-label">节点笔记</div>
-        <h3>{{ selected.title }}</h3>
-        <div v-if="selected.body" class="node-body" v-html="renderMarkdown(selected.body)"></div>
-        <p v-else class="node-empty">内容收在下面的子节点里。</p>
-        <button class="tree-action continue-node" @click="emit('continue', selected)">从这里继续问 <span aria-hidden="true">↗</span></button>
+      <section v-if="selected" class="node-suggestions" aria-label="接着问">
+        <h3>接着问</h3>
+        <p v-if="suggestionsLoading" class="suggestion-notice" role="status">正在找还没聊过的问题…</p>
+        <div v-else-if="suggestionsError" class="suggestion-failure" role="status">
+          <p>{{ suggestionsError }}</p>
+          <button class="tree-action" @click="emit('retrySuggestions')">重新推荐</button>
+        </div>
+        <template v-else>
+          <button v-for="question in suggestions" :key="question" class="suggested-question" :disabled="!!suggestionDisabledReason"
+            @click="emit('suggest', question, selected)"><span>{{ question }}</span><span aria-hidden="true">↗</span></button>
+          <p v-if="!suggestions.length" class="suggestion-notice">{{ suggestionDisabledReason || '暂时没有新的推荐，可以继续提问。' }}</p>
+        </template>
+        <p v-if="suggestionDisabledReason && suggestions.length" class="suggestion-notice">{{ suggestionDisabledReason }}</p>
+        <button class="tree-action continue-node" :disabled="editingDisabled" @click="emit('continue', selected)">自己提问 <span aria-hidden="true">↗</span></button>
       </section>
 
-      <section v-else-if="note" class="node-note legacy-note" aria-label="现有笔记">
-        <h3>{{ note.title }}</h3>
-        <div class="node-body" v-html="renderMarkdown(note.content)"></div>
-      </section>
+      <p v-else-if="entries.length" class="tree-browse-hint">选择一个问题，回看当时的问答。</p>
       <div v-else class="tree-empty">
         <span class="tree-empty-mark" aria-hidden="true">⌘</span>
-        <p>{{ status === 'pending' ? '正在整理第一轮讨论…' : automatic ? '问一个问题，回答后会自动整理到这里。' : '开启“自动整理”后，新问答会归入学习树。' }}</p>
+        <p>{{ note ? '这份旧笔记还没有问题目录，可继续聊天或打开原笔记。' : status === 'pending' ? '正在整理第一轮讨论…' : automatic ? '聊过的问题会自动整理到这里。' : '开启“自动整理”后，新问答会归入目录。' }}</p>
       </div>
     </div>
 
     <footer class="tree-footer">
       <div class="tree-status" :class="{ failed: status === 'failed' }" aria-live="polite">
         <span v-if="status !== 'failed'" class="status-dot" :class="{ pending: status === 'pending' }" aria-hidden="true"></span>
-        <span>{{ status === 'failed' ? error || '这轮还没整理完成，问答已保留。' : status === 'pending' ? '正在整理，可继续聊天' : status === 'unchanged' ? '这轮没有新增知识点' : automatic ? '随对话自动整理' : '自动整理已关闭' }}</span>
+        <span>{{ status === 'failed' ? error || '这轮还没整理完成，问答已保留。' : status === 'pending' ? '正在整理，可继续聊天' : status === 'unchanged' ? '这轮没有新增问题' : automatic ? '随对话自动整理' : '自动整理已关闭' }}</span>
         <button v-if="status === 'failed'" class="tree-action" :disabled="busy" @click="emit('retry')">{{ busy ? '重试中…' : '重试' }}</button>
       </div>
       <div v-if="note" class="tree-footer-actions">
@@ -113,20 +121,15 @@ function toggle(id: string) {
 .tree-node { flex: 1; min-width: 0; display: flex; align-items: baseline; justify-content: space-between; gap: 5px; padding: 9px 7px 9px 0; border: 0; background: none; color: var(--text); font: 12px/1.7 var(--font); text-align: left; cursor: pointer; overflow-wrap: anywhere; }
 .tree-node[aria-pressed=true] { color: var(--accent); }
 .tree-updated { flex: none; color: var(--accent); font-size: 10px; }
-.node-note { margin-top: 25px; padding-top: 20px; border-top: 1px solid var(--border); }
-.node-note-label { color: var(--text-mut); font-size: 11px; margin-bottom: 10px; letter-spacing: .8px; }
-.node-note h3 { font: 600 14px/1.7 var(--font); margin: 0 0 10px; overflow-wrap: anywhere; }
-.node-body { color: var(--text); font-size: 13px; line-height: 1.85; overflow-wrap: anywhere; }
-.node-body :deep(p) { margin: 0 0 10px; }
-.node-body :deep(ul), .node-body :deep(ol) { padding-left: 20px; }
-.node-body :deep(pre) { overflow-x: auto; background: var(--bg-code); border-radius: 6px; padding: 10px; font-size: 12px; white-space: pre; }
-.node-body :deep(table) { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
-.node-body :deep(th), .node-body :deep(td) { border-bottom: 1px solid var(--border); padding: 6px 8px; }
-.node-body :deep(img) { max-width: 100%; height: auto; }
-.node-body :deep(h1), .node-body :deep(h2), .node-body :deep(h3) { font-size: 14px; margin: 14px 0 8px; }
-.node-body :deep(a) { color: var(--accent); }
-.node-empty { color: var(--text-mut); font-size: 12px; }
-.legacy-note { border: 0; padding-top: 0; margin-top: 0; }
+.node-suggestions { margin-top: 25px; padding-top: 20px; border-top: 1px solid var(--border); }
+.node-suggestions h3 { font: 500 12px/1.7 var(--font); color: var(--text-mut); margin: 0 0 12px; }
+.suggested-question { width: 100%; display: flex; justify-content: space-between; gap: 12px; margin: 7px 0; padding: 11px 12px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text); text-align: left; font: 13px/1.7 var(--font); cursor: pointer; overflow-wrap: anywhere; }
+.suggested-question:hover:not(:disabled) { background: var(--accent-glow); border-color: var(--accent); }
+.suggested-question>span:last-child { color: var(--accent); flex: none; }
+.suggested-question:disabled { color: var(--text-mut); cursor: default; opacity: .65; }
+.suggestion-notice, .tree-browse-hint { color: var(--text-mut); font-size: 12px; line-height: 1.8; margin: 10px 0; }
+.tree-browse-hint { margin-top: 20px; }
+.suggestion-failure { font-size: 12px; line-height: 1.8; color: var(--text-mut); }
 .tree-action { background: none; border: 0; padding: 2px 0; color: var(--accent); font: 12px var(--font); cursor: pointer; }
 .tree-action:disabled { color: var(--text-dim); cursor: default; }
 .continue-node { margin-top: 12px; }

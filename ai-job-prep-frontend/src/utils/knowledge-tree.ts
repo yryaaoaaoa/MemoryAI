@@ -5,6 +5,7 @@ export interface KnowledgeNode {
   title: string
   body: string
   children: KnowledgeNode[]
+  sourceMessageIds?: number[]
 }
 
 export interface KnowledgeTree { version: 1; nodes: KnowledgeNode[] }
@@ -16,6 +17,9 @@ export function readTree(text: string): KnowledgeTree {
     if (!n || typeof n.id !== 'string' || !n.id.trim() || n.id.length > 128 || ids.has(n.id) ||
       typeof n.title !== 'string' || !n.title.trim() || n.title.length > 120 || /[\r\n]/.test(n.title) ||
       typeof n.body !== 'string' || n.body.length > 40000 || !Array.isArray(n.children)) return false
+    if (n.sourceMessageIds !== undefined && (!Array.isArray(n.sourceMessageIds) ||
+      n.sourceMessageIds.some((id: unknown) => !Number.isSafeInteger(id) || Number(id) <= 0) ||
+      new Set(n.sourceMessageIds).size !== n.sourceMessageIds.length)) return false
     ids.add(n.id)
     return ids.size <= 1000 && (!n.children.length || valid(n.children, depth + 1))
   })
@@ -95,6 +99,9 @@ export function parseTreeNote(text: string): TreeNote {
     if (!item || typeof item !== 'object') return false
     const n = item as Record<string, unknown>
     if (typeof n.id !== 'string' || !n.id || ids.has(n.id) || typeof n.title !== 'string' || typeof n.body !== 'string' || !Array.isArray(n.children)) return false
+    if (n.sourceMessageIds !== undefined && (!Array.isArray(n.sourceMessageIds) ||
+      n.sourceMessageIds.some((id: unknown) => !Number.isSafeInteger(id) || Number(id) <= 0) ||
+      new Set(n.sourceMessageIds).size !== n.sourceMessageIds.length)) return false
     ids.add(n.id)
     return n.children.every(isNode)
   }

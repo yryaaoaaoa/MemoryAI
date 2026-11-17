@@ -71,6 +71,18 @@ public class RagController {
         return R.ok(learningTreeService.retry(id, userId));
     }
 
+    @GetMapping("/api/sessions/{id}/learning-tree/nodes/{nodeId}")
+    public R<LearningTreeService.NodeDetail> learningTreeNode(@CurrentUserId Long userId, @PathVariable Long id,
+                                                            @PathVariable String nodeId) {
+        return R.ok(learningTreeService.nodeDetail(id, userId, nodeId));
+    }
+
+    @PostMapping("/api/sessions/{id}/learning-tree/nodes/{nodeId}/suggestions")
+    public R<LearningTreeService.Suggestions> learningTreeSuggestions(@CurrentUserId Long userId, @PathVariable Long id,
+                                                                     @PathVariable String nodeId) {
+        return R.ok(learningTreeService.suggestions(id, userId, nodeId));
+    }
+
     @Data
     public static class CreateSessionBody {
         private String title;
@@ -135,7 +147,7 @@ public class RagController {
         if (sid != null) {
             sessionId = Long.valueOf(sid.toString());
             String noteContext = noteNodeId == null ? learningNoteService.contextForSession(sessionId, userId)
-                    : learningNoteService.contextForSession(sessionId, userId, noteNodeId);
+                    : learningTreeService.contextForNode(sessionId, userId, noteNodeId);
             ChatSessionService.ChatContext ctx = chatSessionService.beginUserTurn(sessionId, userId, message);
             replyOrder = ctx.replyOrder();
             for (ChatMessage msg : ctx.windowMessages()) {

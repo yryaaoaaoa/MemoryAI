@@ -14,6 +14,7 @@ export interface LearningTreeState {
   messageId: number | null
   error: string | null
 }
+export interface LearningNodeConversation { nodeId: string; title: string; messages: SourceMessage[] }
 interface StoredNote extends Omit<LearningNote, 'sources'> { sourceSnapshot: string }
 interface StoredTreeState extends Omit<LearningTreeState, 'note'> { note: StoredNote | null }
 function readNote({ sourceSnapshot, ...note }: StoredNote): LearningNote {
@@ -45,5 +46,11 @@ export const notesApi = {
   async retryLearningTree(sessionId: number): Promise<LearningTreeState> {
     const state = await request.post<any, StoredTreeState>(`/api/sessions/${sessionId}/learning-tree/retry`)
     return { ...state, note: state.note ? readNote(state.note) : null }
+  },
+  nodeConversation(sessionId: number, nodeId: string) {
+    return request.get<any, LearningNodeConversation>(`/api/sessions/${sessionId}/learning-tree/nodes/${encodeURIComponent(nodeId)}`)
+  },
+  nodeSuggestions(sessionId: number, nodeId: string) {
+    return request.post<any, { questions: string[] }>(`/api/sessions/${sessionId}/learning-tree/nodes/${encodeURIComponent(nodeId)}/suggestions`, {}, { timeout: 180000 })
   },
 }
